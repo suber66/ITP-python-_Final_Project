@@ -1,0 +1,3808 @@
+================================================================================
+PYTHON PROJECT DUMP (NO COMMENTS)
+Generated: 2026-05-18 01:23:44.688593
+Directory: C:\Users\Админ\OneDrive\Рабочий стол\ITP2_Final_Project\src
+================================================================================
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 constants.py
+════════════════════════════════════════════════════════════════════════════════
+
+from utils import Color
+
+class Colors:
+    WHITE = Color(255, 255, 255, 255)
+    BLACK = Color(0, 0, 0, 255)
+
+class WindowConfig:
+    WIDTH: int = 1280
+    HEIGHT: int = 720
+    REFERENCE_WIDTH: int = 1920
+    REFERENCE_HEIGHT: int = 1080
+    MATCH_WIDTH_HEIGHT: float = 0.5
+    BG_FILL_COLOR: Color = Colors.BLACK
+    REFRESH_RATE: int = 60
+    VSYNC: int = 1
+    TITLE: str = 'Project Doomsday'
+
+class World:
+    GLOBAL_SCALE = 2
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 main.py
+════════════════════════════════════════════════════════════════════════════════
+
+import pygame
+from core.renderer import Renderer
+from core.gameManager import GameManager
+from managers.sceneManager import SceneManager
+from constants import WindowConfig
+from scenes.menu_scene import register_menu_scene
+from scenes.game_scene import register_game_scene
+
+def main() -> None:
+    pygame.init()
+    renderer = Renderer(width=WindowConfig.WIDTH, height=WindowConfig.HEIGHT, refresh_rate=WindowConfig.REFRESH_RATE, vsync=WindowConfig.VSYNC, title=WindowConfig.TITLE, flags=pygame.DOUBLEBUF | pygame.HWSURFACE | pygame.RESIZABLE)
+    GameManager.instance().set_renderer(renderer)
+    sm = SceneManager.instance()
+    register_menu_scene(sm)
+    register_game_scene(sm)
+    sm.load_scene('menu')
+    renderer.run()
+if __name__ == '__main__':
+    main()
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 components\backgroundPanel.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from typing import Tuple
+import pygame
+from core.ui.components.ui_component import UIComponent
+from core.ui.ui_anchor import UIAnchor
+
+class BackgroundPanel(UIComponent):
+
+    def __init__(self, game_object, *, anchor: UIAnchor=None, rect: pygame.Rect=None, color: Tuple, corner_radius: int=12, border_color: Tuple=None, border_width: int=0, ui_layer: int=0) -> None:
+        super().__init__(game_object, ui_layer=ui_layer, anchor=anchor)
+        self._color = color
+        self._corner_radius = corner_radius
+        self._border_color = border_color
+        self._border_width = border_width
+        self._surface: pygame.Surface = None
+        self._build()
+
+    def on_resize(self, screen_w: int, screen_h: int) -> None:
+        super().on_resize(screen_w, screen_h)
+        self._build()
+
+    def _build(self) -> None:
+        surf = pygame.Surface(self._rect.size, pygame.SRCALPHA)
+        r = pygame.Rect(0, 0, *self._rect.size)
+        pygame.draw.rect(surf, self._color, r, border_radius=self._corner_radius)
+        if self._border_width > 0 and self._border_color:
+            pygame.draw.rect(surf, self._border_color, r, width=self._border_width, border_radius=self._corner_radius)
+        self._surface = surf
+
+    def UIRender(self, screen: pygame.Surface) -> None:
+        if self._surface:
+            screen.blit(self._surface, self._rect.topleft)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 components\boxCollider.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+import pygame
+from core.component import Component
+from geometry import Vector2
+from physics.physicsManager import PhysicsLayers, PhysicsManager
+
+class BoxCollider(Component):
+
+    def __init__(self, game_object, is_trigger: bool=False, layer: int=PhysicsLayers.DEFAULT, position_offset: Vector2=None, size_offset: Vector2=None) -> None:
+        super().__init__(game_object)
+        self.is_trigger = is_trigger
+        self.layer = layer
+        self.position_offset = position_offset if position_offset is not None else Vector2(0, 0)
+        self.size_offset = size_offset if size_offset is not None else Vector2(0, 0)
+        self._rect: pygame.Rect = pygame.Rect(0, 0, 0, 0)
+        self._prev_rect: pygame.Rect = None
+
+    @property
+    def offset(self) -> Vector2:
+        return self.position_offset
+
+    @offset.setter
+    def offset(self, value: Vector2) -> None:
+        self.position_offset = value
+
+    def OnEnable(self) -> None:
+        PhysicsManager.instance().register_collider(self)
+
+    def OnDisable(self) -> None:
+        PhysicsManager.instance().unregister_collider(self)
+
+    def OnDestroy(self) -> None:
+        self.OnDisable()
+
+    @property
+    def rect(self) -> pygame.Rect:
+        w = int(self.transform.size.x * abs(self.transform.scale.x) + self.size_offset.x)
+        h = int(self.transform.size.y * abs(self.transform.scale.y) + self.size_offset.y)
+        self._rect.width = max(1, w)
+        self._rect.height = max(1, h)
+        self._rect.centerx = int(self.transform.position.x + self.position_offset.x)
+        self._rect.centery = int(self.transform.position.y + self.position_offset.y)
+        return self._rect
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 components\cameraFollow.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from core.gameObject import GameObject
+from core.monoBehavior import MonoBehavior
+from geometry import Vector2
+
+class CameraFollow(MonoBehavior):
+
+    def __init__(self, game_object: GameObject, target: GameObject=None, lerp_speed: float=0.1) -> None:
+        super().__init__(game_object)
+        self.target = target
+        self.lerp_speed = lerp_speed
+
+    def LateUpdate(self) -> None:
+        if self.target:
+            cur_pos = self.transform.position
+            target_pos = self.target.transform.position
+            new_x = cur_pos.x + (target_pos.x - cur_pos.x) * self.lerp_speed
+            new_y = cur_pos.y + (target_pos.y - cur_pos.y) * self.lerp_speed
+            self.transform.position = Vector2(new_x, new_y)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 components\door.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from components.boxCollider import BoxCollider
+from core.gameObject import GameObject
+from core.monoBehavior import MonoBehavior
+from physics.physicsManager import PhysicsLayers
+
+class Door(MonoBehavior):
+
+    def __init__(self, game_object: GameObject, direction: str='up', dungeon_manager=None) -> None:
+        super().__init__(game_object)
+        self.direction = direction
+        self._dungeon_manager = dungeon_manager
+        self._cooldown: int = 0
+
+    def Update(self) -> None:
+        if self._cooldown > 0:
+            self._cooldown -= 1
+
+    def on_trigger_enter(self, other_collider: BoxCollider) -> None:
+        if self._cooldown > 0:
+            return
+        if other_collider.layer != PhysicsLayers.PLAYER:
+            return
+        if self._dungeon_manager is None:
+            return
+        success = self._dungeon_manager.transition_to_room(self.direction)
+        if success:
+            self._cooldown = 30
+
+    def on_trigger_exit(self, other_collider: BoxCollider) -> None:
+        if other_collider.layer != PhysicsLayers.PLAYER:
+            return
+        if self._dungeon_manager is None:
+            return
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 components\finish.py
+════════════════════════════════════════════════════════════════════════════════
+
+from core.monoBehavior import MonoBehavior
+from core.gameObject import GameObject
+from physics.physicsManager import PhysicsLayers
+from components.boxCollider import BoxCollider
+
+class Finish(MonoBehavior):
+
+    def __init__(self, game_object: GameObject, timer=None, dungeon_manager=None) -> None:
+        super().__init__(game_object)
+        self._timer = timer
+        self._dungeon_manager = dungeon_manager
+        self._triggered: bool = False
+
+    def set_timer(self, timer) -> None:
+        self._timer = timer
+
+    def set_dungeon_manager(self, dm) -> None:
+        self._dungeon_manager = dm
+
+    def on_trigger_enter(self, other: BoxCollider) -> None:
+        if self._triggered:
+            return
+        obj = other.gameObject
+        if not getattr(obj, 'is_finish', False):
+            return
+        self._triggered = True
+        self._on_finish()
+
+    def _on_finish(self) -> None:
+        from managers.saveManager import SaveManager
+        from managers.sceneManager import SceneManager
+        elapsed = 0.0
+        if self._timer and self._timer.running:
+            elapsed = self._timer.stop()
+        best = SaveManager.Get('best_time', None)
+        if best is None or elapsed < best:
+            SaveManager.Set('best_time', elapsed)
+        SceneManager.instance().load_scene('menu')
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 components\liveTimerText.py
+════════════════════════════════════════════════════════════════════════════════
+
+import pygame
+from components.timer import Timer
+from core.ui.components.ui_component import UIComponent
+from core.ui.ui_anchor import UIAnchor
+
+class LiveTimerText(UIComponent):
+
+    def __init__(self, game_object, *, game_timer: Timer, anchor: UIAnchor=None, ui_layer: int=0) -> None:
+        super().__init__(game_object, ui_layer=ui_layer, anchor=anchor)
+        self._timer = game_timer
+        self._font = None
+        self._font_size = 32
+        self._color = (255, 255, 100, 255)
+        self._outline_color = (80, 60, 0, 255)
+        self._last_text = ''
+        self._surface = None
+
+    def _get_font(self) -> 'pygame.freetype.Font':
+        if self._font is None:
+            import pygame.freetype
+            from core.ui.components.tmp_text import _FontCache
+            self._font = _FontCache.get('Arial', bold=True)
+        return self._font
+
+    def _fmt(self, t: float) -> str:
+        if t is None:
+            return '--:--.--'
+        minutes = int(t) // 60
+        seconds = int(t) % 60
+        millis = int((t - int(t)) * 100)
+        return f'{minutes:02d}:{seconds:02d}.{millis:02d}'
+
+    def _build(self, text: str) -> None:
+        import pygame.freetype
+        font = self._get_font()
+        surf = pygame.Surface(self._rect.size, pygame.SRCALPHA)
+        bounds = font.get_rect(text, size=self._font_size)
+        x = (self._rect.width - bounds.width) / 2
+        y = (self._rect.height - bounds.height) / 2
+        ow = 2
+        for (ox, oy) in [(-ow, 0), (ow, 0), (0, -ow), (0, ow)]:
+            font.render_to(surf, (x + ox, y + oy), text, fgcolor=self._outline_color, size=self._font_size)
+        font.render_to(surf, (x, y), text, fgcolor=self._color, size=self._font_size)
+        self._surface = surf
+
+    def UIUpdate(self) -> None:
+        t = self._fmt(self._timer.elapsed)
+        if t != self._last_text:
+            self._last_text = t
+            self._build(t)
+
+    def UIRender(self, screen: pygame.Surface) -> None:
+        if self._surface:
+            screen.blit(self._surface, self._rect.topleft)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 components\Minimap.py
+════════════════════════════════════════════════════════════════════════════════
+
+import pygame
+from core.ui.components.ui_component import UIComponent
+from core.ui.ui_anchor import UIAnchor
+from dungeon.dungeonManager import DungeonManager
+
+class Minimap(UIComponent):
+    ROOM_SIZE: int = 20
+    'Pixel side-length of each room icon on the raw surface.'
+    ROOM_GAP: int = 16
+    'Pixel gap between adjacent room icons on the raw surface.'
+    PADDING: int = 20
+    'Pixel margin between the dungeon graph and the raw surface edge.'
+    BG_COLOR: tuple = (10, 10, 26, 210)
+    'Background fill of the entire minimap panel.'
+    BORDER_COLOR: tuple = (70, 70, 110, 200)
+    'Outer border of the minimap panel.'
+    LINE_VISITED: tuple = (80, 80, 140, 200)
+    'Connector line colour between two rooms with confirmed matching doors.'
+    LINE_UNKNOWN: tuple = (45, 45, 75, 140)
+    'Connector line colour when door data is unavailable for either room.'
+    VISITED_FILL: tuple = (70, 70, 160, 220)
+    'Background fill for a room the player has already entered.'
+    VISITED_BORD: tuple = (110, 110, 200, 255)
+    'Border colour for a visited room.'
+    CURRENT_FILL: tuple = (90, 90, 200, 255)
+    'Background fill for the room the player is currently in.'
+    CURRENT_BORD: tuple = (255, 215, 0, 255)
+    'Border colour for the current room (gold).'
+    UNKNOWN_FILL: tuple = (28, 28, 48, 180)
+    'Background fill for a room the player has not yet visited.'
+    UNKNOWN_BORD: tuple = (55, 55, 85, 170)
+    'Border colour for an unvisited room.'
+    FINISH_FILL: tuple = (18, 58, 38, 220)
+    'Background fill for the dungeon exit room.'
+    FINISH_BORD: tuple = (55, 195, 115, 255)
+    'Border colour for the dungeon exit room (green).'
+    PLAYER_COLOR: tuple = (255, 215, 0, 255)
+    'Colour of the player dot drawn at the centre of the current room icon.'
+    NEIGHBORS: dict = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}
+    'Cardinal direction vectors used when iterating over room adjacency.'
+
+    def __init__(self, game_object, *, dungeon_manager: DungeonManager, anchor: UIAnchor=None, ui_layer: int=0) -> None:
+        super().__init__(game_object, ui_layer=ui_layer, anchor=anchor)
+        self._dm = dungeon_manager
+        self._font = None
+        self._raw_surface = None
+        self._scaled_surface = None
+        self._last_state = None
+        self._last_rect = None
+        self._dirty: bool = True
+
+    def on_resize(self, screen_w: int, screen_h: int) -> None:
+        super().on_resize(screen_w, screen_h)
+        self._dirty = True
+
+    def UIUpdate(self) -> None:
+        cur = self._dm.current_position
+        visited = frozenset(self._dm._rooms.keys())
+        key = (cur, visited)
+        rect_changed = self._last_rect != self._rect
+        if self._dirty or key != self._last_state or rect_changed:
+            self._last_state = key
+            self._last_rect = self._rect.copy()
+            self._rebuild(cur, visited)
+            self._dirty = False
+
+    def UIRender(self, screen: pygame.Surface) -> None:
+        if self._scaled_surface is None:
+            self._update_scaled_surface()
+        if self._scaled_surface:
+            screen.blit(self._scaled_surface, self._rect.topleft)
+
+    def _get_font(self):
+        if self._font is None:
+            from core.ui.components.tmp_text import _FontCache
+            self._font = _FontCache.get('Arial')
+        return self._font
+
+    def _get_connections(self, world_set: set, visited: frozenset) -> list:
+        DIRECTION_TO_DELTA = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}
+        OPPOSITE = {'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left'}
+        connections = []
+        drawn = set()
+        for pos in world_set:
+            room = self._dm._rooms.get(pos)
+            for (direction, (dx, dy)) in DIRECTION_TO_DELTA.items():
+                nb = (pos[0] + dx, pos[1] + dy)
+                if nb not in world_set:
+                    continue
+                edge = frozenset([pos, nb])
+                if edge in drawn:
+                    continue
+                drawn.add(edge)
+                nb_room = self._dm._rooms.get(nb)
+                if room is not None and nb_room is not None:
+                    has_door_here = room.get_door_at_direction(direction) is not None
+                    has_door_there = nb_room.get_door_at_direction(OPPOSITE[direction]) is not None
+                    connections.append((pos, nb, has_door_here and has_door_there))
+                else:
+                    connections.append((pos, nb, False))
+        return connections
+
+    def _is_finish_room(self, pos: tuple) -> bool:
+        room = self._dm._rooms.get(pos)
+        if room is None:
+            return False
+        for tile in room.tiles:
+            if getattr(tile, 'tile_type', -1) == 3:
+                return True
+        return False
+
+    def _rebuild(self, cur: tuple, visited: frozenset) -> None:
+        world = self._dm._world_map
+        if not world:
+            self._raw_surface = None
+            self._scaled_surface = None
+            return
+        all_pos = list(world.keys())
+        all_gx = [p[0] for p in all_pos]
+        all_gy = [p[1] for p in all_pos]
+        (min_gx, max_gx) = (min(all_gx), max(all_gx))
+        (min_gy, max_gy) = (min(all_gy), max(all_gy))
+        step = self.ROOM_SIZE + self.ROOM_GAP
+        P = self.PADDING
+
+        def to_px(gx: int, gy: int) -> tuple:
+            x = P + (gx - min_gx) * step + self.ROOM_SIZE // 2
+            y = P + (gy - min_gy) * step + self.ROOM_SIZE // 2
+            return (x, y)
+        surf_w = 2 * P + (max_gx - min_gx) * step + self.ROOM_SIZE
+        surf_h = 2 * P + (max_gy - min_gy) * step + self.ROOM_SIZE
+        surf = pygame.Surface((surf_w, surf_h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, self.BG_COLOR, (0, 0, surf_w, surf_h), border_radius=8)
+        pygame.draw.rect(surf, self.BORDER_COLOR, (0, 0, surf_w, surf_h), width=1, border_radius=8)
+        world_set = set(world.keys())
+        drawn_edges = set()
+        for (gx, gy) in all_pos:
+            for (dx, dy) in self.NEIGHBORS.values():
+                nb = (gx + dx, gy + dy)
+                if nb not in world_set:
+                    continue
+                edge = frozenset([(gx, gy), nb])
+                if edge in drawn_edges:
+                    continue
+                drawn_edges.add(edge)
+                for (pos_a, pos_b, confirmed) in self._get_connections(world_set, visited):
+                    color = self.LINE_VISITED if confirmed else self.LINE_UNKNOWN
+                    pygame.draw.line(surf, color, to_px(*pos_a), to_px(*pos_b), 2)
+        font = self._get_font()
+        for (gx, gy) in all_pos:
+            pos = (gx, gy)
+            (cx, cy) = to_px(gx, gy)
+            (rx, ry) = (cx - self.ROOM_SIZE // 2, cy - self.ROOM_SIZE // 2)
+            rect = pygame.Rect(rx, ry, self.ROOM_SIZE, self.ROOM_SIZE)
+            is_cur = pos == cur
+            is_visited = pos in visited
+            is_finish = self._is_finish_room(pos)
+            if is_cur:
+                (fill, bord, bw) = (self.CURRENT_FILL, self.CURRENT_BORD, 2)
+            elif is_finish:
+                (fill, bord, bw) = (self.FINISH_FILL, self.FINISH_BORD, 2)
+            elif is_visited:
+                (fill, bord, bw) = (self.VISITED_FILL, self.VISITED_BORD, 1)
+            else:
+                (fill, bord, bw) = (self.UNKNOWN_FILL, self.UNKNOWN_BORD, 1)
+            pygame.draw.rect(surf, fill, rect, border_radius=3)
+            pygame.draw.rect(surf, bord, rect, width=bw, border_radius=3)
+            if is_finish and (not is_cur):
+                font.render_to(surf, (rx + 2, ry + 1), 'F', fgcolor=self.FINISH_BORD, size=7)
+            elif not is_visited:
+                font.render_to(surf, (rx + 2, ry + 1), '?', fgcolor=self.UNKNOWN_BORD, size=7)
+        if cur in world_set:
+            (pcx, pcy) = to_px(*cur)
+            pygame.draw.circle(surf, self.PLAYER_COLOR, (pcx, pcy), 3)
+        self._raw_surface = surf
+        self._update_scaled_surface()
+
+    def _update_scaled_surface(self) -> None:
+        if self._raw_surface is None:
+            self._scaled_surface = None
+            return
+        (target_w, target_h) = (self._rect.width, self._rect.height)
+        if target_w <= 0 or target_h <= 0:
+            self._scaled_surface = None
+            return
+        (raw_w, raw_h) = self._raw_surface.get_size()
+        scale = min(target_w / raw_w, target_h / raw_h)
+        new_w = max(1, int(raw_w * scale))
+        new_h = max(1, int(raw_h * scale))
+        scaled = pygame.transform.smoothscale(self._raw_surface, (new_w, new_h))
+        self._scaled_surface = pygame.Surface((target_w, target_h), pygame.SRCALPHA)
+        x = (target_w - new_w) // 2
+        y = (target_h - new_h) // 2
+        self._scaled_surface.blit(scaled, (x, y))
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 components\playerController.py
+════════════════════════════════════════════════════════════════════════════════
+
+import pygame
+from core.monoBehavior import MonoBehavior
+from components.rigidbody import Rigidbody
+from core.spriteRenderer import SpriteRenderer
+from geometry import Vector2
+
+class PlayerController(MonoBehavior):
+
+    def __init__(self, game_object, move_speed: float=5.0) -> None:
+        super().__init__(game_object)
+        self.move_speed = move_speed
+        self._rigidbody: Rigidbody | None = None
+        self._sprite_renderer: SpriteRenderer | None = None
+
+    def Start(self) -> None:
+        self._rigidbody = self.gameObject.GetComponent(Rigidbody)
+        self._sprite_renderer = self.gameObject.GetComponent(SpriteRenderer)
+
+    def Update(self) -> None:
+        keys = pygame.key.get_pressed()
+        move_dir = Vector2(0, 0)
+        if keys[pygame.K_w] or keys[pygame.K_UP]:
+            move_dir.y -= 1
+        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+            move_dir.y += 1
+        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+            move_dir.x -= 1
+            if self._sprite_renderer:
+                self._sprite_renderer.flip_x = True
+        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+            move_dir.x += 1
+            if self._sprite_renderer:
+                self._sprite_renderer.flip_x = False
+        if self._rigidbody and (move_dir.x != 0 or move_dir.y != 0):
+            velocity = Vector2(move_dir.x * self.move_speed, move_dir.y * self.move_speed)
+            self._rigidbody.move(velocity)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 components\rigidbody.py
+════════════════════════════════════════════════════════════════════════════════
+
+from typing import Optional, List
+from core.component import Component
+from components.boxCollider import BoxCollider
+from core.gameObject import GameObject
+from physics.physicsManager import PhysicsManager, PhysicsLayers
+from geometry import Vector2
+
+class Rigidbody(Component):
+
+    def __init__(self, game_object: GameObject) -> None:
+        super().__init__(game_object)
+        self.velocity = Vector2(0, 0)
+        self._collider: Optional[BoxCollider] = None
+        self._solid_layers = (PhysicsLayers.WALL, PhysicsLayers.OBSTACLE)
+
+    def Start(self) -> None:
+        self._collider = self.gameObject.GetComponent(BoxCollider)
+
+    def move(self, move_delta: Vector2) -> None:
+        if not self._collider:
+            p = self.transform.position
+            self.transform.position = Vector2(p.x + move_delta.x, p.y + move_delta.y)
+            return
+        physics = PhysicsManager.instance()
+        if move_delta.x != 0:
+            self.transform._set_position_silent(Vector2(self.transform.position.x + move_delta.x, self.transform.position.y))
+            if self._collider.enabled:
+                self._depenetrate('x', physics)
+        if move_delta.y != 0:
+            self.transform._set_position_silent(Vector2(self.transform.position.x, self.transform.position.y + move_delta.y))
+            if self._collider.enabled:
+                self._depenetrate('y', physics)
+        self.transform._notify_changed()
+        physics._spatial.remove(self._collider)
+        physics._spatial.insert(self._collider)
+
+    def _depenetrate(self, axis: str, physics: PhysicsManager) -> None:
+        solids = [c for c in physics.get_collisions(self._collider) if c.layer in self._solid_layers and (not c.is_trigger)]
+        if not solids:
+            return
+        my_rect = self._collider.rect
+        if axis == 'x':
+            push = self._resolve_x(my_rect, solids)
+            if push != 0:
+                self.transform._set_position_silent(Vector2(self.transform.position.x + push, self.transform.position.y))
+        else:
+            push = self._resolve_y(my_rect, solids)
+            if push != 0:
+                self.transform._set_position_silent(Vector2(self.transform.position.x, self.transform.position.y + push))
+
+    @staticmethod
+    def _resolve_x(my_rect, solids) -> float:
+        total = 0.0
+        for other in solids:
+            r = other.rect
+            if not my_rect.colliderect(r):
+                continue
+            overlap_right = my_rect.right - r.left
+            overlap_left = r.right - my_rect.left
+            push = -overlap_right if overlap_right <= overlap_left else overlap_left
+            total += push
+            my_rect = my_rect.move(push, 0)
+        return total
+
+    @staticmethod
+    def _resolve_y(my_rect, solids) -> float:
+        total = 0.0
+        for other in solids:
+            r = other.rect
+            if not my_rect.colliderect(r):
+                continue
+            overlap_bottom = my_rect.bottom - r.top
+            overlap_top = r.bottom - my_rect.top
+            push = -overlap_bottom if overlap_bottom <= overlap_top else overlap_top
+            total += push
+            my_rect = my_rect.move(0, push)
+        return total
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 components\timer.py
+════════════════════════════════════════════════════════════════════════════════
+
+import time
+from core.monoBehavior import MonoBehavior
+from core.gameObject import GameObject
+
+class Timer(MonoBehavior):
+
+    def __init__(self, game_object: GameObject) -> None:
+        super().__init__(game_object)
+        self._start_time: float = 0.0
+        self._elapsed: float = 0.0
+        self._running: bool = False
+
+    @property
+    def elapsed(self) -> float:
+        if self._running:
+            return time.time() - self._start_time
+        return self._elapsed
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    def start(self) -> None:
+        self._start_time = time.time()
+        self._running = True
+
+    def stop(self) -> float:
+        if self._running:
+            self._elapsed = time.time() - self._start_time
+            self._running = False
+        return self._elapsed
+
+    def reset(self) -> None:
+        self._elapsed = 0.0
+        self._running = False
+
+    def format(self, elapsed: float=None) -> str:
+        t = elapsed if elapsed is not None else self.elapsed
+        minutes = int(t) // 60
+        seconds = int(t) % 60
+        millis = int((t - int(t)) * 100)
+        return f'{minutes:02d}:{seconds:02d}.{millis:02d}'
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\camera.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+import pygame
+from core.component import Component
+from geometry import Vector2
+
+class Camera(Component):
+
+    def __init__(self, game_object: 'GameObject', zoom: float=1.0) -> None:
+        super().__init__(game_object)
+        self.zoom: float = zoom
+
+    def WorldToScreen(self, world_pos: Vector2) -> Vector2:
+        screen = pygame.display.get_surface()
+        if not screen:
+            return world_pos
+        half_w = screen.get_width() / 2
+        half_h = screen.get_height() / 2
+        screen_x = (world_pos.x - self.transform.position.x) * self.zoom + half_w
+        screen_y = (world_pos.y - self.transform.position.y) * self.zoom + half_h
+        return Vector2(screen_x, screen_y)
+
+    def ScreenToWorld(self, screen_pos: Vector2) -> Vector2:
+        screen = pygame.display.get_surface()
+        if not screen:
+            return screen_pos
+        half_w = screen.get_width() / 2
+        half_h = screen.get_height() / 2
+        world_x = (screen_pos.x - half_w) / self.zoom + self.transform.position.x
+        world_y = (screen_pos.y - half_h) / self.zoom + self.transform.position.y
+        return Vector2(world_x, world_y)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\component.py
+════════════════════════════════════════════════════════════════════════════════
+
+from abc import ABC
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from core.gameObject import GameObject
+    from core.transform import Transform
+
+class Component(ABC):
+
+    def __init__(self, game_object: 'GameObject') -> None:
+        self._game_object = game_object
+        self._enabled = True
+
+    @property
+    def gameObject(self) -> 'GameObject':
+        return self._game_object
+
+    @property
+    def transform(self) -> 'Transform':
+        return self._game_object.transform
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        if self._enabled != value:
+            self._enabled = value
+            if self._enabled:
+                self.OnEnable()
+            else:
+                self.OnDisable()
+
+    def Awake(self) -> None:
+        pass
+
+    def OnEnable(self) -> None:
+        pass
+
+    def Start(self) -> None:
+        pass
+
+    def Update(self) -> None:
+        pass
+
+    def LateUpdate(self) -> None:
+        pass
+
+    def OnDisable(self) -> None:
+        pass
+
+    def OnDestroy(self) -> None:
+        pass
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\gameManager.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from components.playerController import PlayerController
+from core.renderer import Renderer
+from tools import Console
+
+class GameManager:
+    _instance: 'GameManager | None' = None
+
+    @classmethod
+    def instance(cls) -> 'GameManager':
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self) -> None:
+        if GameManager._instance is not None:
+            raise Exception('GameManager is a singleton! Use GameManager.instance()')
+        self.renderer: Renderer | None = None
+        self.player: PlayerController | None = None
+        self.current_events: list = []
+        self._debug_show_colliders: bool = False
+        GameManager._instance = self
+
+    def set_renderer(self, renderer: Renderer) -> None:
+        self.renderer = renderer
+
+    def set_player(self, player: PlayerController) -> None:
+        self.player = player
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\gameObject.py
+════════════════════════════════════════════════════════════════════════════════
+
+from typing import Dict, Type, TypeVar, Optional
+from core.component import Component
+from core.transform import Transform
+from tools import Console
+T = TypeVar('T', bound='Component')
+
+class GameObject:
+
+    def __init__(self, name: str='GameObject') -> None:
+        self.name = name
+        self._components: Dict[Type, 'Component'] = {}
+        self._activeSelf = True
+        self._started = False
+        self._transform = self.AddComponent(Transform)
+
+    @property
+    def activeSelf(self) -> bool:
+        return self._activeSelf
+
+    def SetActive(self, value: bool) -> None:
+        if self._activeSelf != value:
+            self._activeSelf = value
+            for comp in self._components.values():
+                if comp.enabled:
+                    if self._activeSelf:
+                        comp.OnEnable()
+                    else:
+                        comp.OnDisable()
+
+    @property
+    def transform(self) -> 'Transform':
+        return self._transform
+
+    def AddComponent(self, component_class: Type[T], *args, **kwargs) -> T:
+        if component_class in self._components:
+            Console.warning(f'Component {component_class.__name__} already exists on {self.name}')
+            return self._components[component_class]
+        component = component_class(self, *args, **kwargs)
+        self._components[component_class] = component
+        component.Awake()
+        if self._activeSelf and component.enabled:
+            component.OnEnable()
+        if self._started and self._activeSelf and component.enabled:
+            component.Start()
+        return component
+
+    def GetComponent(self, component_class: Type[T]) -> Optional[T]:
+        return self._components.get(component_class)
+
+    def RemoveComponent(self, component_class: Type[T]) -> bool:
+        if component_class in self._components:
+            component = self._components[component_class]
+            component.OnDestroy()
+            del self._components[component_class]
+            return True
+        return False
+
+    def Update(self) -> None:
+        if not self._activeSelf:
+            return
+        if not self._started:
+            for comp in self._components.values():
+                if comp.enabled:
+                    comp.Start()
+            self._started = True
+        for comp in self._components.values():
+            if comp.enabled:
+                comp.Update()
+
+    def LateUpdate(self) -> None:
+        if not self._activeSelf:
+            return
+        for comp in self._components.values():
+            if comp.enabled:
+                comp.LateUpdate()
+
+    def Destroy(self) -> None:
+        for comp in list(self._components.values()):
+            comp.OnDestroy()
+        self._components.clear()
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\monoBehavior.py
+════════════════════════════════════════════════════════════════════════════════
+
+from core.component import Component
+
+class MonoBehavior(Component):
+    pass
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\renderer.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+import sys
+from typing import List, Optional
+import pygame
+import constants
+from core.camera import Camera
+from core.gameObject import GameObject
+from core.spriteRenderer import SpriteRenderer
+from core.tilemapRenderer import TilemapRenderer
+from geometry import Vector2
+from tools import Console
+
+class Renderer:
+
+    def __init__(self, *, width: int, height: int, refresh_rate: int, vsync: int, title: str, flags: int) -> None:
+        self.width = width
+        self.height = height
+        self.refresh_rate = refresh_rate
+        self.vsync = vsync
+        self.title = title
+        self.flags = flags
+        if not pygame.get_init():
+            pygame.init()
+        self.__screen = pygame.display.set_mode((self.width, self.height), vsync=vsync, flags=flags)
+        pygame.display.set_caption(self.title)
+        self.clock = pygame.time.Clock()
+        self.__scene_objects: List[GameObject] = []
+        self._render_components: list = []
+        self._render_list_dirty: bool = True
+        self._main_camera: Optional[Camera] = None
+        self._pending_add: List[GameObject] = []
+        self._pending_remove: List[GameObject] = []
+        self._canvases: list = []
+
+    def register_object(self, obj: GameObject) -> None:
+        if isinstance(obj, GameObject):
+            self._pending_add.append(obj)
+        else:
+            Console.error(f'Cannot register {type(obj).__name__}.')
+
+    def unregister_object(self, obj: GameObject) -> None:
+        self._pending_remove.append(obj)
+
+    def mark_render_dirty(self) -> None:
+        self._render_list_dirty = True
+
+    def register_canvas(self, canvas) -> None:
+        from core.ui.components.ui_component import CanvasRegistry
+        if canvas not in self._canvases:
+            self._canvases.append(canvas)
+            self._canvases.sort(key=lambda c: c.sort_layer)
+            CanvasRegistry.register(canvas)
+
+    def unregister_canvas(self, canvas) -> None:
+        from core.ui.components.ui_component import CanvasRegistry
+        if canvas in self._canvases:
+            self._canvases.remove(canvas)
+            CanvasRegistry.unregister(canvas)
+
+    def clear_canvases(self) -> None:
+        from core.ui.components.ui_component import CanvasRegistry
+        for c in list(self._canvases):
+            CanvasRegistry.unregister(c)
+        self._canvases.clear()
+
+    def _flush_pending(self) -> None:
+        changed = False
+        for obj in self._pending_remove:
+            if obj in self.__scene_objects:
+                self.__scene_objects.remove(obj)
+                changed = True
+        self._pending_remove.clear()
+        for obj in self._pending_add:
+            if obj not in self.__scene_objects:
+                self.__scene_objects.append(obj)
+                changed = True
+                cam = obj.GetComponent(Camera)
+                if cam and cam.enabled and (self._main_camera is None):
+                    self._main_camera = cam
+                from core.ui.canvas import Canvas
+                canvas = obj.GetComponent(Canvas)
+                if canvas and canvas.enabled:
+                    self.register_canvas(canvas)
+        self._pending_add.clear()
+        if changed:
+            self._render_list_dirty = True
+
+    def _rebuild_render_list(self) -> None:
+        components = []
+        for obj in self.__scene_objects:
+            if not obj.activeSelf:
+                continue
+            tr = obj.GetComponent(TilemapRenderer)
+            if tr and tr.enabled:
+                components.append(tr)
+                continue
+            sr = obj.GetComponent(SpriteRenderer)
+            if sr and sr.enabled:
+                components.append(sr)
+        components.sort(key=lambda c: getattr(c, 'sorting_layer', 0))
+        self._render_components = components
+        self._render_list_dirty = False
+
+    def _get_main_camera(self) -> Camera:
+        if self._main_camera and self._main_camera.enabled and self._main_camera.gameObject.activeSelf:
+            return self._main_camera
+        for obj in self.__scene_objects:
+            if not obj.activeSelf:
+                continue
+            cam = obj.GetComponent(Camera)
+            if cam and cam.enabled:
+                self._main_camera = cam
+                return cam
+        return self._make_dummy_camera()
+
+    @staticmethod
+    def _make_dummy_camera():
+
+        class DummyCamera:
+            zoom = 1.0
+
+            def WorldToScreen(self, pos: Vector2) -> Vector2:
+                return pos
+        return DummyCamera()
+
+    def _is_visible(self, component, camera) -> bool:
+        if isinstance(component, TilemapRenderer):
+            return True
+        surf = getattr(component, '_scaled_surface', None)
+        if surf is None:
+            return False
+        pos = camera.WorldToScreen(component.transform.position)
+        zoom = getattr(camera, 'zoom', 1.0)
+        hw = surf.get_width() * zoom / 2 + 1
+        hh = surf.get_height() * zoom / 2 + 1
+        return pos.x + hw > 0 and pos.x - hw < self.width and (pos.y + hh > 0) and (pos.y - hh < self.height)
+
+    def _handle_events(self) -> bool:
+        from core.gameManager import GameManager
+        events = pygame.event.get()
+        if GameManager._instance:
+            GameManager.instance().current_events = events
+        for event in events:
+            if event.type == pygame.QUIT:
+                return False
+            elif event.type == pygame.VIDEORESIZE:
+                (self.width, self.height) = (event.w, event.h)
+                self.__screen = pygame.display.set_mode((self.width, self.height), vsync=self.vsync, flags=self.flags)
+                for canvas in self._canvases:
+                    canvas.on_resize(self.width, self.height)
+        return True
+
+    def run(self) -> None:
+        fill_color = constants.WindowConfig.BG_FILL_COLOR.to_tuple() if hasattr(constants.WindowConfig.BG_FILL_COLOR, 'to_tuple') else (0, 0, 0)
+        while True:
+            self.clock.tick(self.refresh_rate)
+            self._flush_pending()
+            if not self._handle_events():
+                pygame.quit()
+                sys.exit(0)
+            for obj in self.__scene_objects:
+                if obj.activeSelf:
+                    obj.Update()
+            from physics.physicsManager import PhysicsManager
+            PhysicsManager.instance().process_triggers()
+            for obj in self.__scene_objects:
+                if obj.activeSelf:
+                    obj.LateUpdate()
+            for canvas in self._canvases:
+                if canvas.enabled and canvas.gameObject.activeSelf:
+                    canvas.Update()
+            self.__screen.fill(fill_color)
+            if self._render_list_dirty:
+                self._rebuild_render_list()
+            main_camera = self._get_main_camera()
+            for rc in self._render_components:
+                if not rc.enabled or not rc.gameObject.activeSelf:
+                    continue
+                if self._is_visible(rc, main_camera):
+                    rc.Render(self.__screen, main_camera)
+            from core.gameManager import GameManager
+            gm = GameManager._instance
+            if gm and getattr(gm, '_debug_show_colliders', False):
+                from physics.physicsManager import PhysicsManager
+                zoom = getattr(main_camera, 'zoom', 1.0)
+                for col in PhysicsManager.instance()._colliders:
+                    if not col.enabled:
+                        continue
+                    r = col.rect
+                    tl = main_camera.WorldToScreen(Vector2(r.left, r.top))
+                    draw_rect = pygame.Rect(int(tl.x), int(tl.y), int(r.width * zoom), int(r.height * zoom))
+                    color = (0, 120, 255) if col.is_trigger else (255, 50, 50)
+                    pygame.draw.rect(self.__screen, color, draw_rect, 1)
+            for canvas in self._canvases:
+                if canvas.enabled and canvas.gameObject.activeSelf:
+                    canvas.Render(self.__screen, main_camera)
+            pygame.display.flip()
+            from managers.sceneManager import SceneManager
+            if SceneManager._instance:
+                SceneManager.instance().flush_pending()
+
+    def clear_scene(self) -> None:
+        for obj in list(self.__scene_objects):
+            obj.Destroy()
+        self.__scene_objects.clear()
+        self._pending_add.clear()
+        self._pending_remove.clear()
+        self._render_components.clear()
+        self._render_list_dirty = True
+        self._main_camera = None
+        self.clear_canvases()
+        from physics.physicsManager import PhysicsManager
+        pm = PhysicsManager.instance()
+        pm._colliders.clear()
+        pm._spatial._grid.clear()
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\sprite.py
+════════════════════════════════════════════════════════════════════════════════
+
+from typing import Optional
+import pygame
+import os
+from tools import Console
+from geometry import Vector2
+
+class Sprite:
+    ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp']
+
+    def __init__(self, *, path: str, surface: pygame.Surface) -> None:
+        self._path = path
+        self._surface = surface
+        t_s = self._surface.get_size()
+        self._size = Vector2(t_s[0], t_s[1])
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+    @property
+    def surface(self) -> pygame.Surface:
+        return self._surface
+
+    @property
+    def source(self) -> pygame.Surface:
+        return self._surface
+
+    @property
+    def size(self) -> Vector2:
+        return self._size
+
+    def get_surface(self) -> pygame.Surface:
+        return self._surface
+
+    @classmethod
+    def load(cls, path: str) -> Optional['Sprite']:
+        if os.path.exists(path) and os.path.isfile(path):
+            ext = os.path.splitext(path)[-1].lower()
+            if ext in cls.ALLOWED_EXTENSIONS:
+                try:
+                    surface = pygame.image.load(path).convert_alpha()
+                    return cls(path=path, surface=surface)
+                except pygame.error as e:
+                    Console.error(f"Failed to load sprite from '{path}': {e}")
+            else:
+                Console.error(f"Unsupported extension '{ext}' for sprite: '{path}'")
+        else:
+            Console.error(f"Invalid path: file does not exist -> '{path}'")
+        return None
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\spriteRenderer.py
+════════════════════════════════════════════════════════════════════════════════
+
+import pygame
+from typing import Optional, Any
+from core.component import Component
+from core.gameObject import GameObject
+
+class SpriteRenderer(Component):
+
+    def __init__(self, game_object: 'GameObject', sprite: Optional[Any]=None, sorting_layer: int=0) -> None:
+        super().__init__(game_object)
+        self.sprite = sprite
+        self.sorting_layer = sorting_layer
+        self.color = (255, 255, 255)
+        self._source_surface: Optional[pygame.Surface] = None
+        self._scaled_surface: Optional[pygame.Surface] = None
+        self._last_scale = None
+        self._last_size = None
+        self._flipped_surface: Optional[pygame.Surface] = None
+        self._last_flip_x: bool = False
+        self._last_flip_y: bool = False
+        self._zoom_surface: Optional[pygame.Surface] = None
+        self._last_zoom: Optional[float] = None
+        self._flip_x: bool = False
+        self._flip_y: bool = False
+
+    @property
+    def flip_x(self) -> bool:
+        return self._flip_x
+
+    @flip_x.setter
+    def flip_x(self, value: bool) -> None:
+        if self._flip_x != value:
+            self._flip_x = value
+            self._rebuild_flipped()
+
+    @property
+    def flip_y(self) -> bool:
+        return self._flip_y
+
+    @flip_y.setter
+    def flip_y(self, value: bool) -> None:
+        if self._flip_y != value:
+            self._flip_y = value
+            self._rebuild_flipped()
+
+    def Awake(self) -> None:
+        self._update_surface()
+        self.transform.on_changed_callbacks.append(self._on_transform_changed)
+
+    def _update_surface(self) -> None:
+        if self.sprite:
+            raw = self.sprite.get_surface() if hasattr(self.sprite, 'get_surface') else self.sprite
+            self._source_surface = raw
+            self._last_scale = None
+            self._last_size = None
+            self._last_zoom = None
+            self._rebuild_scaled()
+
+    def _on_transform_changed(self) -> None:
+        if self._source_surface is None:
+            return
+        if self.transform.scale != self._last_scale or self.transform.size != self._last_size:
+            self._rebuild_scaled()
+
+    def _rebuild_scaled(self) -> None:
+        if self._source_surface is None:
+            return
+        w = max(1, int(self.transform.size.x * abs(self.transform.scale.x)))
+        h = max(1, int(self.transform.size.y * abs(self.transform.scale.y)))
+        self._scaled_surface = pygame.transform.scale(self._source_surface, (w, h))
+        self._last_scale = self.transform.scale
+        self._last_size = self.transform.size
+        self._rebuild_flipped()
+
+    def _rebuild_flipped(self) -> None:
+        if self._scaled_surface is None:
+            return
+        if self._flip_x or self._flip_y:
+            self._flipped_surface = pygame.transform.flip(self._scaled_surface, self._flip_x, self._flip_y)
+        else:
+            self._flipped_surface = self._scaled_surface
+        self._last_flip_x = self._flip_x
+        self._last_flip_y = self._flip_y
+        self._last_zoom = None
+
+    def _get_render_surface(self, zoom: float) -> Optional[pygame.Surface]:
+        base = self._flipped_surface or self._scaled_surface
+        if base is None:
+            return None
+        if zoom == 1.0:
+            return base
+        if zoom != self._last_zoom:
+            w = max(1, int(base.get_width() * zoom))
+            h = max(1, int(base.get_height() * zoom))
+            self._zoom_surface = pygame.transform.scale(base, (w, h))
+            self._last_zoom = zoom
+        return self._zoom_surface
+
+    def Render(self, screen: pygame.Surface, camera: Any) -> None:
+        if not self.enabled or self._scaled_surface is None:
+            return
+        zoom = getattr(camera, 'zoom', 1.0)
+        surface = self._get_render_surface(zoom)
+        if surface is None:
+            return
+        screen_pos = camera.WorldToScreen(self.transform.position)
+        render_rect = surface.get_rect(center=(int(screen_pos.x), int(screen_pos.y)))
+        screen.blit(surface, render_rect)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\tilemapRenderer.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from typing import Any, List, Optional
+import pygame
+from core.component import Component
+from geometry import Vector2
+
+class TilemapRenderer(Component):
+
+    def __init__(self, game_object: 'GameObject', sorting_layer: int=-10) -> None:
+        super().__init__(game_object)
+        self.sorting_layer = sorting_layer
+        self._baked: Optional[pygame.Surface] = None
+        self._baked_zoom: Optional[pygame.Surface] = None
+        self._last_zoom: Optional[float] = None
+        self._world_topleft: Vector2 = Vector2(0, 0)
+
+    def bake(self, tiles: List) -> None:
+        if not tiles:
+            return
+        from core.spriteRenderer import SpriteRenderer
+        for tile in tiles:
+            sr = tile.GetComponent(SpriteRenderer)
+            if sr and sr._scaled_surface is None:
+                sr._update_surface()
+
+        def tw(t):
+            return max(1, int(t.transform.size.x * abs(t.transform.scale.x)))
+
+        def th(t):
+            return max(1, int(t.transform.size.y * abs(t.transform.scale.y)))
+
+        def topleft_x(t):
+            return int(t.transform.position.x) - tw(t) // 2
+
+        def topleft_y(t):
+            return int(t.transform.position.y) - th(t) // 2
+        tops = [(topleft_x(t), topleft_y(t)) for t in tiles]
+        min_x = min((p[0] for p in tops))
+        min_y = min((p[1] for p in tops))
+        max_x = max((p[0] + tw(t) for (t, p) in zip(tiles, tops)))
+        max_y = max((p[1] + th(t) for (t, p) in zip(tiles, tops)))
+        PAD = 1
+        surf_w = max_x - min_x + PAD * 2
+        surf_h = max_y - min_y + PAD * 2
+        surf = pygame.Surface((surf_w, surf_h), pygame.SRCALPHA)
+        for (tile, (tx, ty)) in zip(tiles, tops):
+            sr = tile.GetComponent(SpriteRenderer)
+            if sr is None or sr._scaled_surface is None:
+                continue
+            surf.blit(sr._scaled_surface, (tx - min_x + PAD, ty - min_y + PAD))
+        self._baked = surf
+        self._world_topleft = Vector2(min_x - PAD, min_y - PAD)
+        self._last_zoom = None
+        self._baked_zoom = None
+
+    def Render(self, screen: pygame.Surface, camera: Any) -> None:
+        if not self.enabled or self._baked is None:
+            return
+        zoom = getattr(camera, 'zoom', 1.0)
+        if zoom != 1.0:
+            if zoom != self._last_zoom:
+                w = max(1, int(self._baked.get_width() * zoom))
+                h = max(1, int(self._baked.get_height() * zoom))
+                self._baked_zoom = pygame.transform.smoothscale(self._baked, (w, h))
+                self._last_zoom = zoom
+            draw_surf = self._baked_zoom
+        else:
+            draw_surf = self._baked
+        screen_pos = camera.WorldToScreen(self._world_topleft)
+        screen.blit(draw_surf, (int(screen_pos.x), int(screen_pos.y)))
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\transform.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from typing import Callable, List, Optional
+from core.component import Component
+from geometry import Vector2
+
+class Transform(Component):
+
+    def __init__(self, game_object: 'GameObject', init_pos: Optional[Vector2]=None, init_scale: Optional[Vector2]=None, init_rot: float=0.0, init_size: Optional[Vector2]=None) -> None:
+        super().__init__(game_object)
+        self._position = init_pos if init_pos else Vector2(0, 0)
+        self._scale = init_scale if init_scale else Vector2(1, 1)
+        self._rotation = init_rot
+        self._size = init_size if init_size else Vector2(32, 32)
+        self.on_changed_callbacks: List[Callable[[], None]] = []
+
+    @property
+    def position(self) -> Vector2:
+        return self._position
+
+    @position.setter
+    def position(self, value: Vector2) -> None:
+        self._position = value
+        self._notify_changed()
+
+    @property
+    def scale(self) -> Vector2:
+        return self._scale
+
+    @scale.setter
+    def scale(self, value: Vector2) -> None:
+        self._scale = value
+        self._notify_changed()
+
+    @property
+    def rotation(self) -> float:
+        return self._rotation
+
+    @rotation.setter
+    def rotation(self, value: float) -> None:
+        self._rotation = value
+        self._notify_changed()
+
+    @property
+    def size(self) -> Vector2:
+        return self._size
+
+    @size.setter
+    def size(self, value: Vector2) -> None:
+        self._size = value
+        self._notify_changed()
+
+    def _notify_changed(self) -> None:
+        for callback in self.on_changed_callbacks:
+            callback()
+
+    def _set_position_silent(self, value: Vector2) -> None:
+        self._position = value
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\__init__.py
+════════════════════════════════════════════════════════════════════════════════
+
+from .monoBehavior import MonoBehavior
+from .component import Component
+from .renderer import Renderer
+from .sprite import Sprite
+from .gameObject import GameObject
+from .camera import Camera
+__all__ = ['MonoBehavior', 'Component', 'Renderer', 'GameObject', 'Sprite', 'CanvasScaler', 'Camera']
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\ui\canvas.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from typing import TYPE_CHECKING, List
+import pygame
+from core.component import Component
+from core.gameObject import GameObject
+if TYPE_CHECKING:
+    from core.ui.components.ui_component import UIComponent
+
+class Canvas(Component):
+
+    def __init__(self, game_object: GameObject, sort_layer: int=1000) -> None:
+        super().__init__(game_object)
+        self.sort_layer: int = sort_layer
+        self._ui_elements: List['UIComponent'] = []
+
+    def on_resize(self, screen_w: int, screen_h: int) -> None:
+        for el in self._ui_elements:
+            if el.enabled:
+                el.on_resize(screen_w, screen_h)
+
+    def OnEnable(self) -> None:
+        from core.gameManager import GameManager
+        from core.ui.components.ui_component import CanvasRegistry
+        gm = GameManager._instance
+        if gm and gm.renderer:
+            gm.renderer.register_canvas(self)
+        CanvasRegistry.register(self)
+
+    def OnDisable(self) -> None:
+        from core.gameManager import GameManager
+        from core.ui.components.ui_component import CanvasRegistry
+        gm = GameManager._instance
+        if gm and gm.renderer:
+            gm.renderer.unregister_canvas(self)
+        CanvasRegistry.unregister(self)
+
+    def OnDestroy(self) -> None:
+        self.OnDisable()
+
+    def register(self, element: 'UIComponent') -> None:
+        if element not in self._ui_elements:
+            self._ui_elements.append(element)
+            self._ui_elements.sort(key=lambda e: e.ui_layer)
+
+    def unregister(self, element: 'UIComponent') -> None:
+        if element in self._ui_elements:
+            self._ui_elements.remove(element)
+
+    def Update(self) -> None:
+        for el in list(self._ui_elements):
+            if el.enabled and el.gameObject.activeSelf:
+                el.UIUpdate()
+
+    def Render(self, screen: pygame.Surface, _camera) -> None:
+        for el in list(self._ui_elements):
+            if el.enabled and el.gameObject.activeSelf:
+                el.UIRender(screen)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\ui\ui_anchor.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from dataclasses import dataclass
+import pygame
+
+@dataclass
+class UIAnchor:
+    anchor_x: float = 0.5
+    anchor_y: float = 0.5
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    width: float = 200.0
+    height: float = 50.0
+
+    def resolve(self, screen_w: int, screen_h: int) -> pygame.Rect:
+        x = screen_w * self.anchor_x + self.offset_x - self.width / 2
+        y = screen_h * self.anchor_y + self.offset_y - self.height / 2
+        return pygame.Rect(int(x), int(y), int(self.width), int(self.height))
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\ui\components\button.py
+════════════════════════════════════════════════════════════════════════════════
+
+import pygame
+import pygame.freetype
+from typing import Callable, Optional, Tuple
+from core.ui.components.ui_component import UIComponent
+from core.ui.components.tmp_text import _FontCache, TextAnchor
+from core.gameObject import GameObject
+from core.gameManager import GameManager
+from core.ui.ui_anchor import UIAnchor
+pygame.freetype.init()
+RGBA = Tuple[int, int, int, int]
+'Type alias for a four-channel colour value ``(R, G, B, A)``.'
+
+class ButtonColors:
+
+    def __init__(self, normal: RGBA=(60, 60, 80, 220), hovered: RGBA=(90, 90, 130, 240), pressed: RGBA=(40, 40, 60, 255), disabled: RGBA=(50, 50, 50, 150), text_normal: RGBA=(255, 255, 255, 255), text_hovered: RGBA=(255, 255, 200, 255), text_pressed: RGBA=(200, 200, 200, 255), text_disabled: RGBA=(120, 120, 120, 255), border: RGBA=(150, 150, 200, 200), border_width: int=2, corner_radius: int=8) -> None:
+        self.normal = normal
+        self.hovered = hovered
+        self.pressed = pressed
+        self.disabled = disabled
+        self.text_normal = text_normal
+        self.text_hovered = text_hovered
+        self.text_pressed = text_pressed
+        self.text_disabled = text_disabled
+        self.border = border
+        self.border_width = border_width
+        self.corner_radius = corner_radius
+
+class _BtnState:
+    NORMAL = 0
+    HOVERED = 1
+    PRESSED = 2
+    DISABLED = 3
+
+class Button(UIComponent):
+
+    def __init__(self, game_object: GameObject, *, anchor: UIAnchor=None, text: str='Button', font_name: str='Arial', font_size: float=18.0, bold: bool=False, colors: Optional[ButtonColors]=None, alignment: TextAnchor=TextAnchor.MIDDLE_CENTER, on_click: Optional[Callable]=None, on_hover: Optional[Callable]=None, on_exit: Optional[Callable]=None, interactable: bool=True, ui_layer: int=0, transition_speed: float=15.0) -> None:
+        super().__init__(game_object, ui_layer=ui_layer, anchor=anchor)
+        self._text = text
+        self._font_name = font_name
+        self._font_size = font_size
+        self._bold = bold
+        self._colors = colors or ButtonColors()
+        self._alignment = alignment
+        self._on_click = on_click
+        self._on_hover = on_hover
+        self._on_exit = on_exit
+        self._interactable = interactable
+        self._transition_speed = transition_speed
+        self._state = _BtnState.NORMAL
+        self._prev_state = _BtnState.NORMAL
+        self._surfaces: dict[int, pygame.Surface] = {}
+        self._dirty = True
+        self._blend: float = 1.0
+        self._blend_surf: Optional[pygame.Surface] = None
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    @text.setter
+    def text(self, v: str) -> None:
+        self._text = str(v)
+        self._dirty = True
+
+    @property
+    def rect(self) -> pygame.Rect:
+        return self._rect
+
+    @property
+    def interactable(self) -> bool:
+        return self._interactable
+
+    @interactable.setter
+    def interactable(self, v: bool) -> None:
+        self._interactable = bool(v)
+
+    def _build_state_surface(self, bg_color: RGBA, text_color: RGBA) -> pygame.Surface:
+        surf = pygame.Surface(self._rect.size, pygame.SRCALPHA)
+        r = pygame.Rect(0, 0, *self._rect.size)
+        pygame.draw.rect(surf, bg_color, r, border_radius=self._colors.corner_radius)
+        if self._colors.border_width > 0:
+            pygame.draw.rect(surf, self._colors.border, r, width=self._colors.border_width, border_radius=self._colors.corner_radius)
+        font = _FontCache.get(self._font_name, self._bold)
+        lines = self._text.split('\n')
+        line_height = font.get_sized_height(self._font_size)
+        total_h = len(lines) * line_height
+        if self._alignment.v == 0:
+            y = 0
+        elif self._alignment.v == 1:
+            y = (r.height - total_h) / 2
+        else:
+            y = r.height - total_h
+        for line in lines:
+            bounds = font.get_rect(line, size=self._font_size)
+            if self._alignment.h == 0:
+                x = 0
+            elif self._alignment.h == 1:
+                x = (r.width - bounds.width) / 2
+            else:
+                x = r.width - bounds.width
+            font.render_to(surf, (x, y), line, fgcolor=text_color, size=self._font_size)
+            y += line_height
+        return surf
+
+    def _build_surfaces(self) -> None:
+        c = self._colors
+        self._surfaces = {_BtnState.NORMAL: self._build_state_surface(c.normal, c.text_normal), _BtnState.HOVERED: self._build_state_surface(c.hovered, c.text_hovered), _BtnState.PRESSED: self._build_state_surface(c.pressed, c.text_pressed), _BtnState.DISABLED: self._build_state_surface(c.disabled, c.text_disabled)}
+        self._dirty = False
+
+    def UIUpdate(self) -> None:
+        if self._dirty:
+            self._build_surfaces()
+        if not self._interactable:
+            self._state = _BtnState.DISABLED
+            return
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_buttons = pygame.mouse.get_pressed()
+        hovering = self._rect.collidepoint(mouse_pos)
+        prev = self._state
+        if hovering:
+            if mouse_buttons[0]:
+                self._state = _BtnState.PRESSED
+            else:
+                if prev == _BtnState.PRESSED:
+                    if self._on_click:
+                        try:
+                            self._on_click()
+                        except Exception as e:
+                            print(f'[Button] on_click error: {e}')
+                self._state = _BtnState.HOVERED
+                if prev != _BtnState.HOVERED and self._on_hover:
+                    self._on_hover()
+        else:
+            if prev == _BtnState.HOVERED and self._on_exit:
+                self._on_exit()
+            self._state = _BtnState.NORMAL
+
+    def UIRender(self, screen: pygame.Surface) -> None:
+        if self._dirty:
+            self._build_surfaces()
+        surf = self._surfaces.get(self._state)
+        if surf:
+            screen.blit(surf, self._rect.topleft)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\ui\components\tmp_text.py
+════════════════════════════════════════════════════════════════════════════════
+
+import pygame
+import pygame.freetype
+from enum import Enum
+from typing import Optional, Tuple
+from core.ui.components.ui_component import UIComponent
+from core.gameObject import GameObject
+pygame.freetype.init()
+
+class TextAnchor(Enum):
+    UPPER_LEFT = (0, 0)
+    UPPER_CENTER = (1, 0)
+    UPPER_RIGHT = (2, 0)
+    MIDDLE_LEFT = (0, 1)
+    MIDDLE_CENTER = (1, 1)
+    MIDDLE_RIGHT = (2, 1)
+    LOWER_LEFT = (0, 2)
+    LOWER_CENTER = (1, 2)
+    LOWER_RIGHT = (2, 2)
+
+    @property
+    def h(self) -> int:
+        return self.value[0]
+
+    @property
+    def v(self) -> int:
+        return self.value[1]
+
+class OverflowMode(Enum):
+    OVERFLOW = 'overflow'
+    TRUNCATE = 'truncate'
+    WRAP = 'wrap'
+
+class _FontCache:
+    _cache: dict = {}
+
+    @classmethod
+    def get(cls, name: str, bold: bool=False, italic: bool=False) -> pygame.freetype.Font:
+        key = (name, bold, italic)
+        if key not in cls._cache:
+            try:
+                font = pygame.freetype.SysFont(name, 0, bold=bold, italic=italic)
+            except Exception:
+                font = pygame.freetype.SysFont('Arial', 0, bold=bold, italic=italic)
+            cls._cache[key] = font
+        return cls._cache[key]
+RGBA = Tuple[int, int, int, int]
+'Type alias for a four-channel colour value ``(R, G, B, A)``.'
+from core.ui.ui_anchor import UIAnchor
+
+class TMP_Text(UIComponent):
+
+    def __init__(self, game_object: GameObject, *, anchor: UIAnchor=None, text: str='Text', font_name: str='Arial', font_size: float=20.0, color: RGBA=(255, 255, 255, 255), alignment: TextAnchor=TextAnchor.MIDDLE_CENTER, bold: bool=False, italic: bool=False, line_spacing: float=1.2, overflow: OverflowMode=OverflowMode.WRAP, outline_width: int=0, outline_color: RGBA=(0, 0, 0, 255), shadow_offset: Tuple[int, int]=(0, 0), shadow_color: RGBA=(0, 0, 0, 128), ui_layer: int=0) -> None:
+        super().__init__(game_object, ui_layer=ui_layer, anchor=anchor)
+        self._text = text
+        self._font_name = font_name
+        self._font_size = font_size
+        self._color = color
+        self._alignment = alignment
+        self._bold = bold
+        self._italic = italic
+        self._line_spacing = line_spacing
+        self._overflow = overflow
+        self._outline_width = outline_width
+        self._outline_color = outline_color
+        self._shadow_offset = shadow_offset
+        self._shadow_color = shadow_color
+        self._surface: Optional[pygame.Surface] = None
+        self._dirty: bool = True
+
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+
+    def _get_font(self) -> pygame.freetype.Font:
+        return _FontCache.get(self._font_name, self._bold, self._italic)
+
+    def _wrap_text(self, font: pygame.freetype.Font, text: str, max_width: int) -> list[str]:
+        if self._overflow != OverflowMode.WRAP or max_width <= 0:
+            return text.split('\n')
+        result = []
+        for paragraph in text.split('\n'):
+            words = paragraph.split(' ')
+            line = ''
+            for word in words:
+                test = (line + ' ' + word).strip()
+                bounds = font.get_rect(test, size=self._font_size)
+                if bounds.width <= max_width or not line:
+                    line = test
+                else:
+                    result.append(line)
+                    line = word
+            result.append(line)
+        return result
+
+    def _build_surface(self) -> None:
+        font = self._get_font()
+        lines = self._wrap_text(font, self._text, self._rect.width)
+        line_height = font.get_sized_height(self._font_size)
+        gap = line_height * (self._line_spacing - 1.0)
+        total_h = len(lines) * line_height + (len(lines) - 1) * gap
+        surf = pygame.Surface((self._rect.width, self._rect.height), pygame.SRCALPHA)
+        if self._alignment.v == 0:
+            y_start = 0
+        elif self._alignment.v == 1:
+            y_start = (self._rect.height - total_h) / 2
+        else:
+            y_start = self._rect.height - total_h
+        y = y_start
+        for line in lines:
+            bounds = font.get_rect(line, size=self._font_size)
+            lw = bounds.width
+            if self._alignment.h == 0:
+                x = 0
+            elif self._alignment.h == 1:
+                x = (self._rect.width - lw) / 2
+            else:
+                x = self._rect.width - lw
+            if self._shadow_offset != (0, 0):
+                font.render_to(surf, (x + self._shadow_offset[0], y + self._shadow_offset[1]), line, fgcolor=self._shadow_color, size=self._font_size)
+            if self._outline_width > 0:
+                ow = self._outline_width
+                for (ox, oy) in [(-ow, 0), (ow, 0), (0, -ow), (0, ow), (-ow, -ow), (ow, -ow), (-ow, ow), (ow, ow)]:
+                    font.render_to(surf, (x + ox, y + oy), line, fgcolor=self._outline_color, size=self._font_size)
+            font.render_to(surf, (x, y), line, fgcolor=self._color, size=self._font_size)
+            y += line_height + gap
+        if self._overflow == OverflowMode.TRUNCATE:
+            clip_surf = pygame.Surface((self._rect.width, self._rect.height), pygame.SRCALPHA)
+            clip_surf.blit(surf, (0, 0))
+            surf = clip_surf
+        self._surface = surf
+        self._dirty = False
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    @text.setter
+    def text(self, v: str) -> None:
+        if self._text != str(v):
+            self._text = str(v)
+            self._mark_dirty()
+
+    @property
+    def font_size(self) -> float:
+        return self._font_size
+
+    @font_size.setter
+    def font_size(self, v: float) -> None:
+        self._font_size = float(v)
+        self._mark_dirty()
+
+    @property
+    def color(self) -> RGBA:
+        return self._color
+
+    @color.setter
+    def color(self, v: RGBA) -> None:
+        self._color = v
+        self._mark_dirty()
+
+    @property
+    def rect(self) -> pygame.Rect:
+        return self._rect
+
+    @rect.setter
+    def rect(self, v: pygame.Rect) -> None:
+        self._rect = v
+        self._mark_dirty()
+
+    @property
+    def alignment(self) -> TextAnchor:
+        return self._alignment
+
+    @alignment.setter
+    def alignment(self, v: TextAnchor) -> None:
+        self._alignment = v
+        self._mark_dirty()
+
+    @property
+    def bold(self) -> bool:
+        return self._bold
+
+    @bold.setter
+    def bold(self, v: bool) -> None:
+        self._bold = v
+        self._mark_dirty()
+
+    def UIUpdate(self) -> None:
+        if self._dirty:
+            self._build_surface()
+
+    def UIRender(self, screen: pygame.Surface) -> None:
+        if self._dirty:
+            self._build_surface()
+        if self._surface:
+            screen.blit(self._surface, self._rect.topleft)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 core\ui\components\ui_component.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from abc import abstractmethod
+from typing import TYPE_CHECKING, Optional
+import pygame
+from core.component import Component
+from core.ui.ui_anchor import UIAnchor
+if TYPE_CHECKING:
+    from core.ui.canvas import Canvas
+
+class UIComponent(Component):
+
+    def __init__(self, game_object: 'GameObject', ui_layer: int=0, anchor: Optional[UIAnchor]=None) -> None:
+        super().__init__(game_object)
+        self.ui_layer: int = ui_layer
+        self._anchor: Optional[UIAnchor] = anchor
+        self._canvas: Optional['Canvas'] = None
+        self._rect: pygame.Rect = pygame.Rect(0, 0, 0, 0)
+        screen = pygame.display.get_surface()
+        if screen and anchor:
+            self._rect = anchor.resolve(screen.get_width(), screen.get_height())
+
+    @property
+    def rect(self) -> pygame.Rect:
+        return self._rect
+
+    def on_resize(self, screen_w: int, screen_h: int) -> None:
+        if self._anchor:
+            new_rect = self._anchor.resolve(screen_w, screen_h)
+            if new_rect != self._rect:
+                self._rect = new_rect
+                if hasattr(self, '_dirty'):
+                    self._dirty = True
+
+    def _register_to_canvas(self) -> None:
+        from core.ui.canvas import Canvas
+        canvas = self.gameObject.GetComponent(Canvas)
+        if canvas is None:
+            canvas = CanvasRegistry.get_primary()
+        if canvas and canvas is not self._canvas:
+            if self._canvas:
+                self._canvas.unregister(self)
+            self._canvas = canvas
+            self._canvas.register(self)
+
+    def bind_canvas(self, canvas: 'Canvas') -> None:
+        if self._canvas:
+            self._canvas.unregister(self)
+        self._canvas = canvas
+        canvas.register(self)
+
+    def Start(self) -> None:
+        self._register_to_canvas()
+
+    def OnEnable(self) -> None:
+        self._register_to_canvas()
+
+    def OnDisable(self) -> None:
+        if self._canvas:
+            self._canvas.unregister(self)
+
+    def OnDestroy(self) -> None:
+        if self._canvas:
+            self._canvas.unregister(self)
+
+    def UIUpdate(self) -> None:
+        pass
+
+    @abstractmethod
+    def UIRender(self, screen: pygame.Surface) -> None:
+
+class CanvasRegistry:
+    _canvases: list = []
+
+    @classmethod
+    def register(cls, canvas: 'Canvas') -> None:
+        if canvas not in cls._canvases:
+            cls._canvases.append(canvas)
+
+    @classmethod
+    def unregister(cls, canvas: 'Canvas') -> None:
+        if canvas in cls._canvases:
+            cls._canvases.remove(canvas)
+
+    @classmethod
+    def get_primary(cls) -> Optional['Canvas']:
+        return cls._canvases[0] if cls._canvases else None
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 dungeon\dungeonGenerator.py
+════════════════════════════════════════════════════════════════════════════════
+
+import csv
+import random
+import warnings
+from collections import deque
+from typing import Dict, List, Optional, Set, Tuple
+RoomMatrix = List[List[int]]
+WorldMap = Dict[Tuple[int, int], RoomMatrix]
+_SHAPE_MIN_DIM: Dict[str, Tuple[int, int]] = {'F': (9, 13), 'H': (9, 13), 'U': (9, 11), 'diagonal_cut': (9, 9), 'octagon': (9, 9), 'plus': (9, 9), 'ring': (9, 9)}
+'Minimum ``(height, width)`` in tiles required before a shape may be used.'
+_ALL_SHAPES = ['rect', 'L', 'J', 'T', 'plus', 'S', 'U', 'Z', 'F', 'H', 'diagonal_cut', 'octagon']
+_SHAPE_WEIGHTS = [28, 8, 8, 8, 8, 8, 8, 6, 6, 6, 6, 6]
+
+class DungeonGenerator:
+    OPPOSITE_DIRECTIONS: Dict[str, str] = {'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left'}
+    DIRECTION_DELTAS: Dict[str, Tuple[int, int]] = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}
+    TILE_FLOOR = 0
+    TILE_WALL = 1
+    TILE_DOOR = 2
+    TILE_FINISH = 3
+    TILE_VOID = 4
+
+    def __init__(self, total_rooms: int=100, min_room_size: int=9, max_room_size: int=15, seed: Optional[int]=None) -> None:
+        self.total_rooms = total_rooms
+        self.min_room_size = max(7, min_room_size)
+        self.max_room_size = max_room_size
+        self.world_map: WorldMap = {}
+        self._rng = random.Random(seed)
+
+    def generate(self) -> WorldMap:
+        self.world_map = {}
+        rooms_count = 0
+        created_rooms_log: List[Dict] = []
+        queue: List[Tuple] = [(0, 0, None, None, None)]
+        while rooms_count < self.total_rooms:
+            if not queue:
+                if not created_rooms_log:
+                    break
+                found = False
+                indices = list(range(len(created_rooms_log)))
+                self._rng.shuffle(indices)
+                for idx in indices:
+                    cand = created_rooms_log[idx]
+                    (gx, gy) = cand['pos']
+                    dirs = ['up', 'down', 'left', 'right']
+                    self._rng.shuffle(dirs)
+                    for d in dirs:
+                        (dx, dy) = self.DIRECTION_DELTAS[d]
+                        (nx, ny) = (gx + dx, gy + dy)
+                        if (nx, ny) not in self.world_map:
+                            queue.append((nx, ny, d, (gx, gy), d))
+                            found = True
+                            break
+                    if found:
+                        break
+                if not queue:
+                    break
+                continue
+            (gx, gy, entry_dir, parent_pos, parent_exit) = queue.pop(0)
+            if (gx, gy) in self.world_map:
+                if parent_pos is not None:
+                    child_dir = self.OPPOSITE_DIRECTIONS[parent_exit]
+                    child_room = self.world_map[gx, gy]
+                    parent_room = self.world_map[parent_pos]
+                    (cmid_x, cmid_y) = self._find_centre(child_room)
+                    (pmid_x, pmid_y) = self._find_centre(parent_room)
+                    self._open_door(child_room, child_dir)
+                    self._clear_door_paths(child_room, [child_dir], cmid_x, cmid_y)
+                    self._open_door(parent_room, parent_exit)
+                    self._clear_door_paths(parent_room, [parent_exit], pmid_x, pmid_y)
+                continue
+            width = self._rng.randint(self.min_room_size, self.max_room_size)
+            height = self._rng.randint(self.min_room_size, self.max_room_size)
+            if width % 2 == 0:
+                width += 1
+            if height % 2 == 0:
+                height += 1
+            if rooms_count == 0:
+                room_type = 'start'
+            elif rooms_count == self.total_rooms - 1:
+                room_type = 'finish'
+            else:
+                room_type = 'normal'
+            door_directions: List[str] = []
+            if entry_dir is not None:
+                door_directions.append(self.OPPOSITE_DIRECTIONS[entry_dir])
+            if room_type == 'start':
+                num_exits = 1
+            elif room_type == 'finish':
+                num_exits = 0
+            else:
+                num_exits = self._rng.choice([1, 1, 2])
+            possible_exits = ['up', 'down', 'left', 'right']
+            if entry_dir is not None:
+                possible_exits.remove(self.OPPOSITE_DIRECTIONS[entry_dir])
+            self._rng.shuffle(possible_exits)
+            new_exits = possible_exits[:num_exits]
+            door_directions.extend(new_exits)
+            (room, _, directions) = self._generate_room(width, height, room_type, door_directions)
+            self.world_map[gx, gy] = room
+            created_rooms_log.append({'pos': (gx, gy), 'dirs': directions})
+            rooms_count += 1
+            for d in new_exits:
+                (dx, dy) = self.DIRECTION_DELTAS[d]
+                queue.append((gx + dx, gy + dy, d, (gx, gy), d))
+        if rooms_count < self.total_rooms:
+            warnings.warn(f'DungeonGenerator: only {rooms_count}/{self.total_rooms} rooms could be placed. Consider a larger grid or fewer rooms.', RuntimeWarning, stacklevel=2)
+        self._seal_pending_queue(queue)
+        self._check_connectivity()
+        return self.world_map
+
+    def save_to_csv(self, filename: str='dungeon.csv') -> None:
+        with open(filename, mode='w', newline='') as fh:
+            writer = csv.writer(fh)
+            writer.writerow(['gx', 'gy', 'lx', 'ly', 'type'])
+            for ((gx, gy), room_matrix) in self.world_map.items():
+                for (ly, row) in enumerate(room_matrix):
+                    for (lx, cell) in enumerate(row):
+                        if cell != 0:
+                            writer.writerow([gx, gy, lx, ly, cell])
+
+    def _available_shapes(self, height: int, width: int) -> Tuple[List[str], List[int]]:
+        (shapes, weights) = ([], [])
+        for (shape, weight) in zip(_ALL_SHAPES, _SHAPE_WEIGHTS):
+            (min_h, min_w) = _SHAPE_MIN_DIM.get(shape, (0, 0))
+            if height >= min_h and width >= min_w:
+                shapes.append(shape)
+                weights.append(weight)
+        if not shapes:
+            (shapes, weights) = (['rect'], [1])
+        return (shapes, weights)
+
+    def _build_shape_mask(self, shape: str, height: int, width: int) -> List[List[bool]]:
+        mask = [[True] * width for _ in range(height)]
+        (H, W) = (height, width)
+        (my, mx) = (H // 2, W // 2)
+
+        def cut(r0: int, r1: int, c0: int, c1: int) -> None:
+            for r in range(r0, r1):
+                for c in range(c0, c1):
+                    if 0 <= r < H and 0 <= c < W:
+                        mask[r][c] = False
+        if shape == 'rect':
+            pass
+        elif shape == 'L':
+            cut(my + 1, H, mx + 1, W)
+        elif shape == 'J':
+            cut(my + 1, H, 0, mx)
+        elif shape == 'T':
+            sw = max(1, W // 5)
+            cut(my + 1, H, 0, mx - sw)
+            cut(my + 1, H, mx + sw + 1, W)
+        elif shape == 'plus':
+            sh = max(1, H // 4)
+            sw = max(1, W // 4)
+            cut(0, my - sh, 0, mx - sw)
+            cut(0, my - sh, mx + sw + 1, W)
+            cut(my + sh + 1, H, 0, mx - sw)
+            cut(my + sh + 1, H, mx + sw + 1, W)
+        elif shape == 'S':
+            split_c = W // 3
+            cut(0, my, 0, split_c)
+            cut(my + 1, H, W - split_c, W)
+        elif shape == 'Z':
+            split_c = W // 3
+            cut(0, my, W - split_c, W)
+            cut(my + 1, H, 0, split_c)
+        elif shape == 'U':
+            sw = max(1, W // 4)
+            cut(0, my, mx - sw + 1, mx + sw)
+        elif shape == 'F':
+            col_w = max(1, W // 4)
+            cut(my + 1, H, col_w * 2, W)
+            cut(my - my // 2, my, col_w * 3, W)
+        elif shape == 'H':
+            col_w = max(2, W // 4)
+            bar_h = max(1, H // 4)
+            cut(0, my - bar_h, col_w, W - col_w)
+            cut(my + bar_h + 1, H, col_w, W - col_w)
+        elif shape == 'diagonal_cut':
+            for r in range(H):
+                for c in range(W):
+                    threshold = mx + round((W - 1 - mx) * r / max(my, 1))
+                    if r < my and c > threshold:
+                        mask[r][c] = False
+        elif shape == 'octagon':
+            cut_x = max(1, W // 4)
+            cut_y = max(1, H // 4)
+            half = (cut_x + cut_y) // 2
+            for r in range(H):
+                for c in range(W):
+                    if r < cut_y and c < cut_x and (r + c < half):
+                        mask[r][c] = False
+                    if r < cut_y and c >= W - cut_x and (r + (W - 1 - c) < half):
+                        mask[r][c] = False
+                    if r >= H - cut_y and c < cut_x and (H - 1 - r + c < half):
+                        mask[r][c] = False
+                    if r >= H - cut_y and c >= W - cut_x and (H - 1 - r + (W - 1 - c) < half):
+                        mask[r][c] = False
+        return mask
+
+    def _door_candidates(self, direction: str, height: int, width: int, mask: List[List[bool]], room: Optional[RoomMatrix]=None) -> List[Tuple[int, int]]:
+        (mid_x, mid_y) = (width // 2, height // 2)
+        candidates: List[Tuple[int, int]] = []
+        if direction == 'up':
+            row = 0
+            for col in range(1, width - 1):
+                if self._is_valid_door_pos(row, col, row + 1, col, height, width, mask, room):
+                    candidates.append((row, col))
+            candidates.sort(key=lambda p: abs(p[1] - mid_x))
+        elif direction == 'down':
+            row = height - 1
+            for col in range(1, width - 1):
+                if self._is_valid_door_pos(row, col, row - 1, col, height, width, mask, room):
+                    candidates.append((row, col))
+            candidates.sort(key=lambda p: abs(p[1] - mid_x))
+        elif direction == 'left':
+            col = 0
+            for row in range(1, height - 1):
+                if self._is_valid_door_pos(row, col, row, col + 1, height, width, mask, room):
+                    candidates.append((row, col))
+            candidates.sort(key=lambda p: abs(p[0] - mid_y))
+        elif direction == 'right':
+            col = width - 1
+            for row in range(1, height - 1):
+                if self._is_valid_door_pos(row, col, row, col - 1, height, width, mask, room):
+                    candidates.append((row, col))
+            candidates.sort(key=lambda p: abs(p[0] - mid_y))
+        return candidates
+
+    def _is_valid_door_pos(self, br: int, bc: int, ir: int, ic: int, height: int, width: int, mask: List[List[bool]], room: Optional[RoomMatrix]=None) -> bool:
+        if not mask[br][bc]:
+            return False
+        if not (0 <= ir < height and 0 <= ic < width):
+            return False
+        if not mask[ir][ic]:
+            return False
+        FLOOR_LIKE = {self.TILE_FLOOR, self.TILE_FINISH}
+        if room is not None:
+            if room[ir][ic] not in FLOOR_LIKE:
+                return False
+            for (nr, nc) in ((ir - 1, ic), (ir + 1, ic), (ir, ic - 1), (ir, ic + 1)):
+                if nr == br and nc == bc:
+                    continue
+                if not (0 <= nr < height and 0 <= nc < width):
+                    continue
+                if room[nr][nc] in FLOOR_LIKE:
+                    return True
+            return False
+        else:
+            for (nr, nc) in ((ir - 1, ic), (ir + 1, ic), (ir, ic - 1), (ir, ic + 1)):
+                if nr == br and nc == bc:
+                    continue
+                if not (0 <= nr < height and 0 <= nc < width):
+                    continue
+                if mask[nr][nc]:
+                    return True
+            return False
+
+    def _mask_from_room(self, room: RoomMatrix) -> List[List[bool]]:
+        return [[cell != self.TILE_VOID for cell in row] for row in room]
+
+    def _find_centre(self, room: RoomMatrix) -> Tuple[int, int]:
+        (h, w) = (len(room), len(room[0]))
+        (mid_y, mid_x) = (h // 2, w // 2)
+        PASSABLE = {self.TILE_FLOOR, self.TILE_FINISH}
+        if room[mid_y][mid_x] in PASSABLE:
+            return (mid_x, mid_y)
+        visited: Set[Tuple[int, int]] = {(mid_y, mid_x)}
+        q: deque = deque([(mid_y, mid_x)])
+        while q:
+            (cy, cx) = q.popleft()
+            if room[cy][cx] in PASSABLE:
+                return (cx, cy)
+            for (ny, nx) in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                if 0 <= ny < h and 0 <= nx < w and ((ny, nx) not in visited):
+                    visited.add((ny, nx))
+                    q.append((ny, nx))
+        return (mid_x, mid_y)
+
+    def _open_door(self, room: RoomMatrix, direction: str) -> Optional[Tuple[int, int]]:
+        (h, w) = (len(room), len(room[0]))
+        mask = self._mask_from_room(room)
+        candidates = self._door_candidates(direction, h, w, mask, room)
+        if not candidates:
+            return None
+        (row, col) = candidates[0]
+        room[row][col] = self.TILE_DOOR
+        return (row, col)
+
+    def _seal_pending_queue(self, queue: List[Tuple]) -> None:
+        for (gx, gy, _entry_dir, parent_pos, parent_exit) in queue:
+            if parent_pos is None:
+                continue
+            if parent_pos not in self.world_map:
+                continue
+            parent_room = self.world_map[parent_pos]
+            (h, w) = (len(parent_room), len(parent_room[0]))
+            mask = self._mask_from_room(parent_room)
+            candidates = self._door_candidates(parent_exit, h, w, mask, parent_room)
+            if not candidates:
+                continue
+            (row, col) = candidates[0]
+            neighbor_pos = (gx, gy)
+            if neighbor_pos not in self.world_map:
+                if parent_room[row][col] == self.TILE_DOOR:
+                    parent_room[row][col] = self.TILE_WALL
+            else:
+                neighbor_room = self.world_map[neighbor_pos]
+                opp = self.OPPOSITE_DIRECTIONS[parent_exit]
+                (nh, nw) = (len(neighbor_room), len(neighbor_room[0]))
+                if opp == 'up':
+                    border = [(0, c) for c in range(nw)]
+                elif opp == 'down':
+                    border = [(nh - 1, c) for c in range(nw)]
+                elif opp == 'left':
+                    border = [(r, 0) for r in range(nh)]
+                else:
+                    border = [(r, nw - 1) for r in range(nh)]
+                has_answering_door = any((neighbor_room[r][c] == self.TILE_DOOR for (r, c) in border))
+                if not has_answering_door and parent_room[row][col] == self.TILE_DOOR:
+                    parent_room[row][col] = self.TILE_WALL
+
+    def _clear_door_paths(self, room: RoomMatrix, directions: List[str], mid_x: int, mid_y: int) -> None:
+        (h, w) = (len(room), len(room[0]))
+        PASSABLE = {self.TILE_FLOOR, self.TILE_DOOR, self.TILE_FINISH}
+        _INNER: Dict[str, Tuple[int, int]] = {'up': (+1, 0), 'down': (-1, 0), 'left': (0, +1), 'right': (0, -1)}
+        for direction in directions:
+            mask = self._mask_from_room(room)
+            candidates = self._door_candidates(direction, h, w, mask, room)
+            if not candidates:
+                continue
+            (door_y, door_x) = candidates[0]
+            if room[door_y][door_x] != self.TILE_DOOR:
+                continue
+            (di_r, di_c) = _INNER[direction]
+            (start_y, start_x) = (door_y + di_r, door_x + di_c)
+            if not (0 <= start_y < h and 0 <= start_x < w):
+                continue
+            if not mask[start_y][start_x]:
+                continue
+
+            def walkable(y: int, x: int) -> bool:
+                on_border = y == 0 or y == h - 1 or x == 0 or (x == w - 1)
+                if on_border:
+                    return False
+                return room[y][x] in PASSABLE
+            visited: Set[Tuple[int, int]] = {(start_y, start_x)}
+            bfs_q: deque = deque([(start_y, start_x)])
+            found = False
+            while bfs_q:
+                (cy, cx) = bfs_q.popleft()
+                if cy == mid_y and cx == mid_x:
+                    found = True
+                    break
+                for (ny, nx) in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                    if 0 <= ny < h and 0 <= nx < w and ((ny, nx) not in visited):
+                        if walkable(ny, nx):
+                            visited.add((ny, nx))
+                            bfs_q.append((ny, nx))
+            if found:
+                continue
+
+            def carve(y: int, x: int) -> None:
+                if not (0 <= y < h and 0 <= x < w):
+                    return
+                if room[y][x] != self.TILE_WALL:
+                    return
+                for (ny2, nx2) in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                    if 0 <= ny2 < h and 0 <= nx2 < w and (room[ny2][nx2] == self.TILE_VOID):
+                        return
+                room[y][x] = self.TILE_FLOOR
+            if direction == 'up':
+                for r in range(door_y + 1, mid_y + 1):
+                    carve(r, door_x)
+                step = 1 if mid_x >= door_x else -1
+                for c in range(door_x, mid_x + step, step):
+                    carve(mid_y, c)
+            elif direction == 'down':
+                for r in range(door_y - 1, mid_y - 1, -1):
+                    carve(r, door_x)
+                step = 1 if mid_x >= door_x else -1
+                for c in range(door_x, mid_x + step, step):
+                    carve(mid_y, c)
+            elif direction == 'left':
+                for c in range(door_x + 1, mid_x + 1):
+                    carve(door_y, c)
+                step = 1 if mid_y >= door_y else -1
+                for r in range(door_y, mid_y + step, step):
+                    carve(r, mid_x)
+            elif direction == 'right':
+                for c in range(door_x - 1, mid_x - 1, -1):
+                    carve(door_y, c)
+                step = 1 if mid_y >= door_y else -1
+                for r in range(door_y, mid_y + step, step):
+                    carve(r, mid_x)
+
+    def _seal_void_leaks(self, room: RoomMatrix, mask: List[List[bool]]) -> None:
+        (h, w) = (len(room), len(room[0]))
+        changed = True
+        while changed:
+            changed = False
+            for r in range(h):
+                for c in range(w):
+                    if room[r][c] != self.TILE_FLOOR:
+                        continue
+                    for (nr, nc) in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+                        if 0 <= nr < h and 0 <= nc < w:
+                            if room[nr][nc] == self.TILE_VOID:
+                                room[r][c] = self.TILE_WALL
+                                changed = True
+                                break
+
+    def _check_connectivity(self) -> None:
+        if not self.world_map:
+            return
+
+        def door_neighbours(gx: int, gy: int) -> List[Tuple[int, int]]:
+            result = []
+            for (d, (dx, dy)) in self.DIRECTION_DELTAS.items():
+                nb = (gx + dx, gy + dy)
+                if nb not in self.world_map:
+                    continue
+                room = self.world_map[gx, gy]
+                (h, w) = (len(room), len(room[0]))
+                if d == 'up':
+                    border = [(0, c) for c in range(w)]
+                elif d == 'down':
+                    border = [(h - 1, c) for c in range(w)]
+                elif d == 'left':
+                    border = [(r, 0) for r in range(h)]
+                else:
+                    border = [(r, w - 1) for r in range(h)]
+                if any((room[r][c] == self.TILE_DOOR for (r, c) in border)):
+                    result.append(nb)
+            return result
+
+        def bfs_reachable(start: Tuple[int, int]) -> Set[Tuple[int, int]]:
+            visited: Set[Tuple[int, int]] = {start}
+            q: deque = deque([start])
+            while q:
+                (gx, gy) = q.popleft()
+                for nb in door_neighbours(gx, gy):
+                    if nb not in visited:
+                        visited.add(nb)
+                        q.append(nb)
+            return visited
+        start = next(iter(self.world_map))
+        reachable = bfs_reachable(start)
+        unreachable = [pos for pos in self.world_map if pos not in reachable]
+        if not unreachable:
+            return
+        warnings.warn(f'DungeonGenerator: {len(unreachable)} room(s) unreachable — running auto-repair.', RuntimeWarning, stacklevel=3)
+        repaired = 0
+        for iso_pos in unreachable:
+            (gx, gy) = iso_pos
+            connected = False
+            for (d, (dx, dy)) in self.DIRECTION_DELTAS.items():
+                nb = (gx + dx, gy + dy)
+                if nb not in self.world_map:
+                    continue
+                iso_room = self.world_map[iso_pos]
+                nb_room = self.world_map[nb]
+                opp = self.OPPOSITE_DIRECTIONS[d]
+                (mid_x, mid_y) = self._find_centre(iso_room)
+                (nmid_x, nmid_y) = self._find_centre(nb_room)
+                placed_iso = self._open_door(iso_room, d)
+                if placed_iso:
+                    self._clear_door_paths(iso_room, [d], mid_x, mid_y)
+                    self._open_door(nb_room, opp)
+                    self._clear_door_paths(nb_room, [opp], nmid_x, nmid_y)
+                    connected = True
+                    repaired += 1
+                    break
+            if not connected:
+                warnings.warn(f'DungeonGenerator: could not auto-repair room at {iso_pos} (no suitable neighbour found).', RuntimeWarning, stacklevel=3)
+        if repaired:
+            reachable2 = bfs_reachable(start)
+            still_bad = len(self.world_map) - len(reachable2)
+            if still_bad > 0:
+                warnings.warn(f'DungeonGenerator: {still_bad} room(s) still unreachable after auto-repair.', RuntimeWarning, stacklevel=3)
+
+    def _generate_room(self, width: int, height: int, room_type: str='normal', directions_to_place: Optional[List[str]]=None) -> Tuple[RoomMatrix, List, List[str]]:
+        if directions_to_place is None:
+            directions_to_place = []
+        if width % 2 == 0:
+            width += 1
+        if height % 2 == 0:
+            height += 1
+        if room_type in ('start', 'finish'):
+            shape = 'rect'
+        else:
+            (avail_shapes, avail_weights) = self._available_shapes(height, width)
+            shape = self._rng.choices(avail_shapes, weights=avail_weights)[0]
+        mask = self._build_shape_mask(shape, height, width)
+        room: RoomMatrix = [[self.TILE_VOID] * width for _ in range(height)]
+        for r in range(height):
+            for c in range(width):
+                if mask[r][c]:
+                    room[r][c] = self.TILE_FLOOR
+        for r in range(height):
+            for c in range(width):
+                if not mask[r][c]:
+                    continue
+                for (nr, nc) in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+                    if nr < 0 or nr >= height or nc < 0 or (nc >= width) or (not mask[nr][nc]):
+                        room[r][c] = self.TILE_WALL
+                        break
+        (mid_x, mid_y) = self._find_centre(room)
+        if room_type == 'normal':
+
+            def try_wall(y: int, x: int) -> None:
+                if not (0 <= y < height and 0 <= x < width):
+                    return
+                if not mask[y][x]:
+                    return
+                if room[y][x] != self.TILE_FLOOR:
+                    return
+                room[y][x] = self.TILE_WALL
+            structure = self._rng.choices(['empty', 'diamond', 'columns', 'cross', 'small_center', 'box', 'diagonal', 'checker', 'pillar_rows', 'maze_fragment', 'ring', 'spiral_arms', 'alcoves', 'scattered'], weights=[30, 6, 6, 6, 6, 6, 6, 6, 6, 5, 5, 5, 5, 2])[0]
+            if structure == 'diamond':
+                for dy in range(-2, 3):
+                    for dx in range(-2, 3):
+                        if abs(dy) + abs(dx) == 2:
+                            try_wall(mid_y + dy, mid_x + dx)
+            elif structure == 'columns':
+                for (dy, dx) in [(-2, -2), (-2, 2), (2, -2), (2, 2)]:
+                    try_wall(mid_y + dy, mid_x + dx)
+            elif structure == 'cross':
+                for dy in range(-2, 3):
+                    try_wall(mid_y + dy, mid_x)
+                for dx in range(-2, 3):
+                    try_wall(mid_y, mid_x + dx)
+            elif structure == 'small_center':
+                for dy in range(-1, 2):
+                    for dx in range(-1, 2):
+                        if dy or dx:
+                            try_wall(mid_y + dy, mid_x + dx)
+            elif structure == 'box':
+                for dy in [-2, 2]:
+                    for dx in range(-2, 3):
+                        try_wall(mid_y + dy, mid_x + dx)
+                for dx in [-2, 2]:
+                    for dy in range(-2, 3):
+                        try_wall(mid_y + dy, mid_x + dx)
+            elif structure == 'diagonal':
+                reach = min(mid_x, mid_y) - 1
+                for i in range(1, reach + 1):
+                    for (sy, sx) in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                        try_wall(mid_y + i * sy, mid_x + i * sx)
+            elif structure == 'checker':
+                for dy in range(-3, 4, 2):
+                    for dx in range(-3, 4, 2):
+                        if dy or dx:
+                            try_wall(mid_y + dy, mid_x + dx)
+            elif structure == 'pillar_rows':
+                for dx in [-3, 3]:
+                    for dy in range(-2, 3):
+                        try_wall(mid_y + dy, mid_x + dx)
+            elif structure == 'maze_fragment':
+                for (sdy, sdx, length, axis) in [(-2, -3, 4, 'h'), (2, 0, 4, 'h'), (-2, -3, 3, 'v'), (0, 3, 3, 'v')]:
+                    for i in range(length):
+                        if axis == 'h':
+                            try_wall(mid_y + sdy, mid_x + sdx + i)
+                        else:
+                            try_wall(mid_y + sdy + i, mid_x + sdx)
+            elif structure == 'ring':
+                for dy in range(-4, 5):
+                    for dx in range(-4, 5):
+                        if abs(dy) + abs(dx) in (3, 4):
+                            try_wall(mid_y + dy, mid_x + dx)
+                for (gdy, gdx) in [(0, -3), (0, 3), (-3, 0), (3, 0)]:
+                    (ny, nx) = (mid_y + gdy, mid_x + gdx)
+                    if 0 <= ny < height and 0 <= nx < width and (room[ny][nx] == self.TILE_WALL) and mask[ny][nx]:
+                        room[ny][nx] = self.TILE_FLOOR
+            elif structure == 'spiral_arms':
+                for ((dys, dxs), (dyt, dxt)) in [((-1, 0), (0, 1)), ((0, 1), (1, 0)), ((1, 0), (0, -1)), ((0, -1), (-1, 0))]:
+                    for i in range(1, 3):
+                        try_wall(mid_y + dys * i, mid_x + dxs * i)
+                    try_wall(mid_y + dys * 2 + dyt, mid_x + dxs * 2 + dxt)
+            elif structure == 'alcoves':
+                margin = 2
+                raw_offsets = [(-(height // 2 - 2), 0), (height // 2 - 2, 0), (0, -(width // 2 - 2)), (0, width // 2 - 2)]
+                safe_offsets = []
+                for (cdy, cdx) in raw_offsets:
+                    cy = mid_y + cdy
+                    cx = mid_x + cdx
+                    if margin <= cy < height - margin and margin <= cx < width - margin:
+                        safe_offsets.append((cdy, cdx))
+                if safe_offsets:
+                    k = self._rng.randint(min(2, len(safe_offsets)), len(safe_offsets))
+                    for (cdy, cdx) in self._rng.sample(safe_offsets, k=k):
+                        (cy, cx) = (mid_y + cdy, mid_x + cdx)
+                        for delta in (-1, 0, 1):
+                            if cdy == 0:
+                                try_wall(cy + delta, cx)
+                            else:
+                                try_wall(cy, cx + delta)
+            elif structure == 'scattered':
+                for _ in range(self._rng.randint(5, 10)):
+                    dy = self._rng.randint(-(mid_y - 1), mid_y - 1)
+                    dx = self._rng.randint(-(mid_x - 1), mid_x - 1)
+                    if abs(dy) < 2 and abs(dx) < 2:
+                        continue
+                    try_wall(mid_y + dy, mid_x + dx)
+        if room_type == 'finish':
+            room[mid_y][mid_x] = self.TILE_FINISH
+        valid_dirs = [d for d in directions_to_place if self._door_candidates(d, height, width, mask, room)]
+        for d in valid_dirs:
+            self._open_door(room, d)
+        self._clear_door_paths(room, valid_dirs, mid_x, mid_y)
+        self._seal_void_leaks(room, mask)
+        return (room, [], valid_dirs)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 dungeon\dungeonManager.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from typing import Dict, List, Optional, Tuple
+from core.gameObject import GameObject
+from core.monoBehavior import MonoBehavior
+from core.spriteRenderer import SpriteRenderer
+from dungeon.dungeonGenerator import DungeonGenerator
+from dungeon.room import Room
+from geometry import Vector2
+
+class DungeonManager(MonoBehavior):
+    OPPOSITE_DIRECTIONS: Dict[str, str] = {'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left'}
+
+    def __init__(self, game_object: GameObject, total_rooms: int=100, min_room_size: int=9, max_room_size: int=15) -> None:
+        super().__init__(game_object)
+        self._generator = DungeonGenerator(total_rooms=total_rooms, min_room_size=min_room_size, max_room_size=max_room_size)
+        self._world_map: Dict[Tuple[int, int], List[List[int]]] = {}
+        self._rooms: Dict[Tuple[int, int], Room] = {}
+        self._current_room: Optional[Room] = None
+        self._current_position: Tuple[int, int] = (0, 0)
+        self._generated: bool = False
+        self._player: Optional[GameObject] = None
+        self._tile_sprites: Dict[int, object] = {}
+        self._transition_cooldown: int = 0
+        self._TRANSITION_COOLDOWN_FRAMES: int = 30
+
+    def Awake(self) -> None:
+        pass
+
+    @property
+    def current_room(self) -> Optional[Room]:
+        return self._current_room
+
+    @property
+    def current_position(self) -> Tuple[int, int]:
+        return self._current_position
+
+    @property
+    def world_map(self) -> Dict[Tuple[int, int], List[List[int]]]:
+        return self._world_map
+
+    def set_player(self, player: GameObject) -> None:
+        self._player = player
+
+    def load_tile_sprites(self, floor_sprite=None, wall_sprite=None, door_sprite=None, finish_sprite=None) -> None:
+        self._tile_sprites = {0: floor_sprite, 1: wall_sprite, 2: door_sprite, 3: finish_sprite}
+        if self._current_room:
+            self._apply_sprites_to_room(self._current_room)
+            self._current_room.bake_background()
+
+    def _apply_sprites_to_room(self, room: Room) -> None:
+        if not self._tile_sprites:
+            return
+        for tile in room.tiles:
+            sprite = self._tile_sprites.get(getattr(tile, 'tile_type', -1))
+            if sprite is not None:
+                sr = tile.GetComponent(SpriteRenderer)
+                if sr:
+                    sr.sprite = sprite
+                    sr._update_surface()
+
+    def generate_dungeon(self) -> None:
+        self._world_map = self._generator.generate()
+        self._generated = True
+        self._current_position = (0, 0)
+        self._load_room(self._current_position)
+
+    def _load_room(self, position: Tuple[int, int]) -> None:
+        if position not in self._world_map:
+            return
+        if self._current_room is not None:
+            self._current_room.unload()
+        if position not in self._rooms:
+            room_matrix = self._world_map[position]
+            room = Room(room_matrix, position, dungeon_manager=self)
+            self._rooms[position] = room
+            self._apply_sprites_to_room(room)
+            room.bake_background()
+        else:
+            room = self._rooms[position]
+            room.reload()
+            room.bake_background()
+        self._current_room = self._rooms[position]
+        self._current_position = position
+
+    def transition_to_room(self, direction: str) -> bool:
+        if not self._current_room:
+            return False
+        door = self._current_room.get_door_at_direction(direction)
+        if not door:
+            return False
+        (gx, gy) = self._current_position
+        if direction == 'up':
+            gy -= 1
+        elif direction == 'down':
+            gy += 1
+        elif direction == 'left':
+            gx -= 1
+        elif direction == 'right':
+            gx += 1
+        if (gx, gy) not in self._world_map:
+            return False
+        self._load_room((gx, gy))
+        if self._player is not None:
+            opposite_dir = self.OPPOSITE_DIRECTIONS[direction]
+            self._teleport_player_to_door(opposite_dir)
+        self._transition_cooldown = self._TRANSITION_COOLDOWN_FRAMES
+        return True
+
+    def _teleport_player_to_door(self, door_direction: str) -> None:
+        if not self._current_room or not self._player:
+            return
+        room = self._current_room
+        door_tile = None
+        for (dx, dy, d) in room.doors:
+            if d == door_direction:
+                door_tile = room.get_tile_at(dx, dy)
+                break
+        if door_tile is None:
+            self._player.transform.position = Vector2(room.width * room.tile_size // 2, room.height * room.tile_size // 2)
+            return
+        door_pos = door_tile.transform.position
+        offset = room.tile_size * 1.5
+        if door_direction == 'up':
+            self._player.transform.position = Vector2(door_pos.x, door_pos.y + offset)
+        elif door_direction == 'down':
+            self._player.transform.position = Vector2(door_pos.x, door_pos.y - offset)
+        elif door_direction == 'left':
+            self._player.transform.position = Vector2(door_pos.x + offset, door_pos.y)
+        elif door_direction == 'right':
+            self._player.transform.position = Vector2(door_pos.x - offset, door_pos.y)
+
+    def is_finish_room(self) -> bool:
+        if not self._current_room:
+            return False
+        for tile in self._current_room.tiles:
+            if getattr(tile, 'is_finish', False):
+                return True
+        return False
+
+    def save_to_csv(self, filename: str='dungeon.csv') -> None:
+        if self._generated:
+            self._generator.save_to_csv(filename)
+
+    def Update(self) -> None:
+        if self._transition_cooldown > 0:
+            self._transition_cooldown -= 1
+        if self._current_room and hasattr(self._current_room, 'update'):
+            self._current_room.update()
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 dungeon\room.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+from typing import List, Optional, Tuple
+from components.boxCollider import BoxCollider
+from core.gameManager import GameManager
+from core.gameObject import GameObject
+from core.spriteRenderer import SpriteRenderer
+from core.tilemapRenderer import TilemapRenderer
+from geometry import Vector2
+from physics.physicsManager import PhysicsLayers
+
+class Room:
+
+    def __init__(self, room_matrix: List[List[int]], room_position: Tuple[int, int]=(0, 0), dungeon_manager=None) -> None:
+        self._room_matrix = room_matrix
+        self.room_position = room_position
+        self._dungeon_manager = dungeon_manager
+        self.width: int = len(room_matrix[0]) if room_matrix else 0
+        self.height: int = len(room_matrix) if room_matrix else 0
+        self.doors: List[Tuple[int, int, str]] = []
+        self.tile_size: int = 32
+        self._static_tiles: List[GameObject] = []
+        self._dynamic_tiles: List[GameObject] = []
+        self._bake_tiles: List[GameObject] = []
+        self.tiles: List[GameObject] = []
+        self._tilemap: Optional[GameObject] = None
+        self._tilemap_renderer: Optional[TilemapRenderer] = None
+        self._build_room()
+
+    def _get_door_direction(self, x: int, y: int) -> str:
+        if y == 0:
+            return 'up'
+        if y == self.height - 1:
+            return 'down'
+        if x == 0:
+            return 'left'
+        if x == self.width - 1:
+            return 'right'
+        return 'up'
+
+    def _build_room(self) -> None:
+        import constants
+        renderer = GameManager.instance().renderer
+        for (y, row) in enumerate(self._room_matrix):
+            for (x, tile_type) in enumerate(row):
+                tile = GameObject(f'Tile_{x}_{y}')
+                tile.transform.position = Vector2((x * self.tile_size + self.tile_size // 2) * constants.World.GLOBAL_SCALE, (y * self.tile_size + self.tile_size // 2) * constants.World.GLOBAL_SCALE)
+                tile.transform.size = Vector2(self.tile_size, self.tile_size)
+                tile.transform.scale = Vector2(constants.World.GLOBAL_SCALE, constants.World.GLOBAL_SCALE)
+                tile.tile_type = tile_type
+                tile.AddComponent(SpriteRenderer, sorting_layer=-1)
+                if tile_type == 0:
+                    self._static_tiles.append(tile)
+                    self._bake_tiles.append(tile)
+                elif tile_type == 1:
+                    tile.AddComponent(BoxCollider, is_trigger=False, layer=PhysicsLayers.WALL)
+                    self._static_tiles.append(tile)
+                    self._bake_tiles.append(tile)
+                elif tile_type == 2:
+                    direction = self._get_door_direction(x, y)
+                    self.doors.append((x, y, direction))
+                    tile.AddComponent(BoxCollider, is_trigger=True, layer=PhysicsLayers.DEFAULT)
+                    tile.is_door = True
+                    tile.door_direction = direction
+                    from components.door import Door
+                    tile.AddComponent(Door, direction=direction, dungeon_manager=self._dungeon_manager)
+                    self._dynamic_tiles.append(tile)
+                    self._bake_tiles.append(tile)
+                elif tile_type == 3:
+                    tile.is_finish = True
+                    tile.AddComponent(BoxCollider, is_trigger=True, layer=PhysicsLayers.DEFAULT)
+                    self._dynamic_tiles.append(tile)
+                    self._bake_tiles.append(tile)
+                self.tiles.append(tile)
+        self._tilemap = GameObject('Room_Tilemap')
+        self._tilemap_renderer = self._tilemap.AddComponent(TilemapRenderer, sorting_layer=-10)
+        renderer.register_object(self._tilemap)
+
+    def bake_background(self) -> None:
+        if self._tilemap_renderer:
+            self._tilemap_renderer.bake(self._bake_tiles)
+        for tile in self._dynamic_tiles:
+            sr = tile.GetComponent(SpriteRenderer)
+            if sr:
+                sr.enabled = False
+
+    def get_door_at_direction(self, direction: str) -> Optional[Tuple[int, int, str]]:
+        for d in self.doors:
+            if d[2] == direction:
+                return d
+        return None
+
+    def get_tile_at(self, x: int, y: int) -> Optional[GameObject]:
+        index = y * self.width + x
+        if 0 <= index < len(self.tiles):
+            return self.tiles[index]
+        return None
+
+    def unload(self) -> None:
+        renderer = GameManager.instance().renderer
+        renderer.unregister_object(self._tilemap)
+        for tile in self._dynamic_tiles:
+            renderer.unregister_object(tile)
+            col = tile.GetComponent(BoxCollider)
+            if col:
+                col.enabled = False
+            sr = tile.GetComponent(SpriteRenderer)
+            if sr:
+                sr.enabled = True
+        for tile in self._static_tiles:
+            col = tile.GetComponent(BoxCollider)
+            if col:
+                col.enabled = False
+
+    def reload(self) -> None:
+        renderer = GameManager.instance().renderer
+        renderer.register_object(self._tilemap)
+        for tile in self._dynamic_tiles:
+            renderer.register_object(tile)
+            col = tile.GetComponent(BoxCollider)
+            if col:
+                col.enabled = True
+        for tile in self._static_tiles:
+            col = tile.GetComponent(BoxCollider)
+            if col:
+                col.enabled = True
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 dungeon\__init__.py
+════════════════════════════════════════════════════════════════════════════════
+
+from dungeon.room import Room
+from dungeon.dungeonGenerator import DungeonGenerator
+from dungeon.dungeonManager import DungeonManager
+__all__ = ['Tile', 'Room', 'DungeonGenerator', 'DungeonManager']
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 geometry\vector2.py
+════════════════════════════════════════════════════════════════════════════════
+
+import math
+import numbers
+from typing import Optional, Tuple, Union
+from tools.console import Console
+from utils.event import Event
+
+class Vector2:
+
+    def __init__(self, x: numbers.Real=0.0, y: numbers.Real=0.0, on_changed: Optional[Event]=None) -> None:
+        self._x = float(x) if isinstance(x, numbers.Real) else 0.0
+        self._y = float(y) if isinstance(y, numbers.Real) else 0.0
+        self._on_changed = on_changed if isinstance(on_changed, Event) else Event([])
+
+    def __add__(self, other: Union['Vector2', numbers.Real]) -> 'Vector2':
+        if isinstance(other, Vector2):
+            return Vector2(self.x + other.x, self.y + other.y)
+        if isinstance(other, numbers.Real):
+            return Vector2(self.x + other, self.y + other)
+        Console.error('Addition failed: The value can only be a vector or a real number.')
+        return NotImplemented
+
+    def __sub__(self, other: Union['Vector2', numbers.Real]) -> 'Vector2':
+        if isinstance(other, Vector2):
+            return Vector2(self.x - other.x, self.y - other.y)
+        if isinstance(other, numbers.Real):
+            return Vector2(self.x - other, self.y - other)
+        Console.error('Subtraction failed: The value can only be a vector or a real number.')
+        return NotImplemented
+
+    def __mul__(self, other: Union['Vector2', numbers.Real]) -> 'Vector2':
+        if isinstance(other, Vector2):
+            return Vector2(self.x * other.x, self.y * other.y)
+        if isinstance(other, numbers.Real):
+            return Vector2(self.x * other, self.y * other)
+        Console.error('Multiplication failed: The value can only be a vector or a real number.')
+        return NotImplemented
+
+    def __truediv__(self, other: Union['Vector2', numbers.Real]) -> 'Vector2':
+        if isinstance(other, Vector2):
+            return Vector2(self.x / other.x if other.x != 0 else float('inf'), self.y / other.y if other.y != 0 else float('inf'))
+        if isinstance(other, numbers.Real):
+            return Vector2(self.x / other if other != 0 else float('inf'), self.y / other if other != 0 else float('inf'))
+        Console.error('Division failed: The value can only be a vector or a real number.')
+        return NotImplemented
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Vector2) and self.x == other.x and (self.y == other.y)
+
+    def __repr__(self) -> str:
+        return f'Vector2({self.x}, {self.y})'
+
+    def __str__(self) -> str:
+        return f'({self.x}, {self.y})'
+
+    @property
+    def x(self) -> float:
+        return self._x
+
+    @x.setter
+    def x(self, value: numbers.Real) -> None:
+        if isinstance(value, numbers.Real):
+            self._x = float(value)
+            if isinstance(self._on_changed, Event):
+                self._on_changed.invoke()
+
+    @property
+    def y(self) -> float:
+        return self._y
+
+    @y.setter
+    def y(self, value: numbers.Real) -> None:
+        if isinstance(value, numbers.Real):
+            self._y = float(value)
+            if isinstance(self._on_changed, Event):
+                self._on_changed.invoke()
+
+    @property
+    def xy(self) -> Tuple[float, float]:
+        return (self._x, self._y)
+
+    def magnitude(self) -> float:
+        return math.hypot(self.x, self.y)
+
+    def normalize(self) -> 'Vector2':
+        mag = self.magnitude()
+        if mag == 0:
+            return Vector2(0, 0)
+        return self / mag
+
+    def copy(self) -> 'Vector2':
+        return Vector2(self.x, self.y)
+
+    def lerp(self, target: 'Vector2', t: float) -> 'Vector2':
+        t = max(0.0, min(1.0, t))
+        return Vector2(self.x + (target.x - self.x) * t, self.y + (target.y - self.y) * t)
+
+    def distance_to(self, other: 'Vector2') -> float:
+        return (other - self).magnitude()
+
+    def dot(self, other: 'Vector2') -> float:
+        return self.x * other.x + self.y * other.y
+zero_vector = Vector2(0, 0)
+unit_vector = Vector2(1, 1)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 geometry\__init__.py
+════════════════════════════════════════════════════════════════════════════════
+
+from .vector2 import Vector2
+__all__ = ['Vector2']
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 managers\saveManager.py
+════════════════════════════════════════════════════════════════════════════════
+
+from __future__ import annotations
+import base64
+import hashlib
+import hmac
+import os
+import pickle
+import tempfile
+from typing import Any, Optional
+from cryptography.fernet import Fernet
+from tools import Console
+_GAME_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SAVE_DIR = os.path.join(_GAME_DIR, 'save_data')
+_KEY_FILE = os.path.join(_SAVE_DIR, '.key')
+
+def _load_or_create_master_key() -> bytes:
+    env_key = os.environ.get('SAVE_MASTER_KEY')
+    if env_key:
+        return env_key.encode()
+    os.makedirs(_SAVE_DIR, exist_ok=True)
+    if os.path.exists(_KEY_FILE):
+        with open(_KEY_FILE, 'rb') as fh:
+            return fh.read().strip()
+    key = Fernet.generate_key()
+    _atomic_write(_KEY_FILE, key)
+    Console.log(f'[SaveManager] New master key created: {_KEY_FILE}')
+    return key
+
+def _atomic_write(path: str, data: bytes) -> None:
+    dir_ = os.path.dirname(path)
+    os.makedirs(dir_, exist_ok=True)
+    (fd, tmp) = tempfile.mkstemp(dir=dir_)
+    try:
+        with os.fdopen(fd, 'wb') as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+def _key_to_filename(key: str, raw_master: bytes) -> str:
+    try:
+        master_bytes = base64.urlsafe_b64decode(raw_master + b'==')
+    except Exception:
+        master_bytes = raw_master
+    digest = hmac.new(master_bytes, key.encode('utf-8'), hashlib.sha256).hexdigest()
+    return digest[:24]
+
+class SaveManager:
+    _instance: Optional['SaveManager'] = None
+
+    @classmethod
+    def instance(cls) -> 'SaveManager':
+        if cls._instance is None:
+            cls._instance = cls.__new__(cls)
+            cls._instance._init()
+        return cls._instance
+
+    def __init__(self) -> None:
+        raise RuntimeError('Use SaveManager.instance() to obtain the singleton.')
+
+    def _init(self) -> None:
+        self._save_dir: str = _SAVE_DIR
+        self._raw_key: bytes = _load_or_create_master_key()
+        self._fernet: Fernet = Fernet(self._raw_key)
+        os.makedirs(self._save_dir, exist_ok=True)
+
+    def _filepath(self, key: str) -> str:
+        return os.path.join(self._save_dir, _key_to_filename(key, self._raw_key))
+
+    def _write(self, key: str, value: Any) -> None:
+        raw = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+        token = self._fernet.encrypt(raw)
+        _atomic_write(self._filepath(key), token)
+
+    def _read(self, key: str) -> Any:
+        path = self._filepath(key)
+        if not os.path.exists(path):
+            raise KeyError(key)
+        with open(path, 'rb') as fh:
+            token = fh.read()
+        return pickle.loads(self._fernet.decrypt(token))
+
+    def get(self, key: str, default: Any=None) -> Any:
+        try:
+            return self._read(key)
+        except KeyError:
+            return default
+        except Exception as exc:
+            Console.error(f'[SaveManager] get({key!r}) failed: {exc}')
+            return default
+
+    def set(self, key: str, value: Any) -> bool:
+        try:
+            self._write(key, value)
+            return True
+        except Exception as exc:
+            Console.error(f'[SaveManager] set({key!r}) failed: {exc}')
+            return False
+
+    def delete(self, key: str) -> None:
+        path = self._filepath(key)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError as exc:
+                Console.error(f'[SaveManager] delete({key!r}) failed: {exc}')
+
+    def has(self, key: str) -> bool:
+        return os.path.exists(self._filepath(key))
+
+    def reset(self) -> None:
+        if not os.path.isdir(self._save_dir):
+            return
+        for fname in os.listdir(self._save_dir):
+            if fname == '.key':
+                continue
+            try:
+                os.remove(os.path.join(self._save_dir, fname))
+            except OSError:
+                pass
+        Console.log('[SaveManager] All save data has been cleared.')
+
+    @staticmethod
+    def Get(key: str, default: Any=None) -> Any:
+        return SaveManager.instance().get(key, default)
+
+    @staticmethod
+    def Set(key: str, value: Any) -> bool:
+        return SaveManager.instance().set(key, value)
+
+    @staticmethod
+    def Has(key: str) -> bool:
+        return SaveManager.instance().has(key)
+
+    @staticmethod
+    def Delete(key: str) -> None:
+        SaveManager.instance().delete(key)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 managers\sceneManager.py
+════════════════════════════════════════════════════════════════════════════════
+
+from typing import Callable, Dict, Optional, List
+from tools import Console
+
+class SceneContext:
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self._owned_objects: List = []
+        self._pending_load: Optional[str] = None
+
+    def _register_object(self, obj) -> None:
+        self._owned_objects.append(obj)
+
+    def request_load(self, scene_name: str) -> None:
+        self._pending_load = scene_name
+
+    @property
+    def renderer(self):
+        from core.gameManager import GameManager
+        return GameManager.instance().renderer
+
+class SceneManager:
+    _instance: Optional['SceneManager'] = None
+
+    @classmethod
+    def instance(cls) -> 'SceneManager':
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self) -> None:
+        if SceneManager._instance is not None:
+            raise Exception('SceneManager is a singleton!')
+        SceneManager._instance = self
+        self._scenes: Dict[str, Callable] = {}
+        self._active_scene_name: Optional[str] = None
+        self._active_ctx: Optional[SceneContext] = None
+        self._pending_load: Optional[str] = None
+
+    def scene(self, name: str) -> Callable:
+
+        def decorator(init_func: Callable) -> Callable:
+            self._scenes[name] = init_func
+            return init_func
+        return decorator
+
+    def load_scene(self, name: str) -> None:
+        self._pending_load = name
+
+    def _do_load_scene(self, name: str) -> None:
+        if name not in self._scenes:
+            Console.error(f'SceneManager: scene "{name}" not found!')
+            return
+        from core.gameManager import GameManager
+        renderer = GameManager.instance().renderer
+        if self._active_ctx:
+            Console.log(f'[Scene] Unloading "{self._active_scene_name}"')
+            for obj in list(self._active_ctx._owned_objects):
+                try:
+                    renderer.unregister_object(obj)
+                    obj.Destroy()
+                except Exception:
+                    pass
+            self._active_ctx._owned_objects.clear()
+        renderer.clear_scene()
+        ctx = SceneContext(name)
+        self._active_ctx = ctx
+        self._active_scene_name = name
+        Console.log(f'[Scene] Loading "{name}"')
+        self._scenes[name](ctx)
+
+    def flush_pending(self) -> None:
+        pending = self._pending_load
+        if pending:
+            self._pending_load = None
+            self._do_load_scene(pending)
+
+    @property
+    def active_scene(self) -> Optional[str]:
+        return self._active_scene_name
+
+    @property
+    def active_ctx(self) -> Optional[SceneContext]:
+        return self._active_ctx
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 physics\physicsManager.py
+════════════════════════════════════════════════════════════════════════════════
+
+from tools import Console
+from typing import Iterator, List, Any, Optional
+
+class PhysicsLayers:
+    DEFAULT = 0
+    WALL = 1
+    OBSTACLE = 2
+    PLAYER = 3
+    NPC = 4
+    LAYER_NAMES = {0: 'Default', 1: 'Wall', 2: 'Obstacle', 3: 'Player', 4: 'NPC'}
+
+    @staticmethod
+    def get_layer_name(layer: int) -> str:
+        return PhysicsLayers.LAYER_NAMES.get(layer, 'Unknown')
+
+class SpatialHash:
+
+    def __init__(self, cell_size: int=64) -> None:
+        self.cell_size = cell_size
+        self._grid: dict = {}
+
+    def _cells(self, rect: Any) -> Iterator[tuple[int, int]]:
+        x0 = rect.left // self.cell_size
+        x1 = rect.right // self.cell_size
+        y0 = rect.top // self.cell_size
+        y1 = rect.bottom // self.cell_size
+        for cx in range(x0, x1 + 1):
+            for cy in range(y0, y1 + 1):
+                yield (cx, cy)
+
+    def insert(self, collider: Any) -> None:
+        for cell in self._cells(collider.rect):
+            bucket = self._grid.get(cell)
+            if bucket is None:
+                self._grid[cell] = [collider]
+            else:
+                bucket.append(collider)
+
+    def remove(self, collider: Any) -> None:
+        for cell in self._cells(collider.rect):
+            bucket = self._grid.get(cell)
+            if bucket and collider in bucket:
+                bucket.remove(collider)
+                if not bucket:
+                    del self._grid[cell]
+
+    def query(self, collider: Any) -> Iterator[Any]:
+        seen = set()
+        for cell in self._cells(collider.rect):
+            for other in self._grid.get(cell, ()):
+                oid = id(other)
+                if oid not in seen:
+                    seen.add(oid)
+                    yield other
+
+    def rebuild(self, colliders: List[Any]) -> None:
+        self._grid.clear()
+        for c in colliders:
+            if c.enabled:
+                self.insert(c)
+
+class PhysicsManager:
+    _instance = None
+
+    @classmethod
+    def instance(cls) -> 'PhysicsManager':
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self) -> None:
+        if PhysicsManager._instance is not None:
+            raise Exception('PhysicsManager is a singleton!')
+        self._colliders: List[Any] = []
+        self._spatial = SpatialHash(cell_size=64)
+        PhysicsManager._instance = self
+
+    def register_collider(self, collider: Any) -> None:
+        if collider not in self._colliders:
+            self._colliders.append(collider)
+            if collider.enabled:
+                self._spatial.insert(collider)
+
+    def unregister_collider(self, collider: Any) -> None:
+        if collider in self._colliders:
+            self._colliders.remove(collider)
+            self._spatial.remove(collider)
+
+    def get_collisions(self, source_collider: Any, target_layer: Optional[int]=None) -> List[Any]:
+        result = []
+        for other in self._spatial.query(source_collider):
+            if other is source_collider or not other.enabled:
+                continue
+            if target_layer is not None and other.layer != target_layer:
+                continue
+            if source_collider.rect.colliderect(other.rect):
+                result.append(other)
+        return result
+
+    def process_triggers(self) -> None:
+        trigger_cols = [c for c in self._colliders if c.enabled and c.is_trigger]
+        solid_cols = [c for c in self._colliders if c.enabled and (not c.is_trigger)]
+        for trigger in trigger_cols:
+            trigger_rect = trigger.rect
+            trigger_prev_rect = trigger._prev_rect
+            for solid in solid_cols:
+                solid_rect = solid.rect
+                solid_prev_rect = solid._prev_rect
+                currently_overlapping = trigger_rect.colliderect(solid_rect)
+                was_overlapping = trigger_prev_rect is not None and solid_prev_rect is not None and trigger_prev_rect.colliderect(solid_prev_rect)
+                if currently_overlapping and (not was_overlapping):
+                    self._fire(trigger.gameObject, 'on_trigger_enter', solid)
+                    self._fire(solid.gameObject, 'on_trigger_enter', trigger)
+                elif not currently_overlapping and was_overlapping:
+                    self._fire(trigger.gameObject, 'on_trigger_exit', solid)
+                    self._fire(solid.gameObject, 'on_trigger_exit', trigger)
+        for c in self._colliders:
+            if c.enabled:
+                c._prev_rect = c.rect.copy()
+            else:
+                c._prev_rect = None
+
+    @staticmethod
+    def _fire(game_object: Any, method: str, other_collider: Any) -> None:
+        if game_object is None:
+            return
+        for comp in list(game_object._components.values()):
+            fn = getattr(comp, method, None)
+            if callable(fn):
+                try:
+                    fn(other_collider)
+                except Exception as e:
+                    Console.error(f'{method} error on {game_object.name}: {e}')
+
+    def rebuild_spatial(self) -> None:
+        self._spatial.rebuild(self._colliders)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 physics\__init__.py
+════════════════════════════════════════════════════════════════════════════════
+
+from physics.physicsManager import PhysicsLayers, PhysicsManager
+__all__ = ['PhysicsLayers', 'PhysicsManager']
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 scenes\game_scene.py
+════════════════════════════════════════════════════════════════════════════════
+
+import os
+import pygame
+from components.Minimap import Minimap
+from components.liveTimerText import LiveTimerText
+import constants
+from core.ui.ui_anchor import UIAnchor
+from managers.sceneManager import SceneManager, SceneContext
+from core.gameObject import GameObject
+from core.gameManager import GameManager
+from core import Sprite
+from core.camera import Camera
+from core.spriteRenderer import SpriteRenderer
+from core.ui.canvas import Canvas
+from components.cameraFollow import CameraFollow
+from components.playerController import PlayerController
+from components.boxCollider import BoxCollider
+from components.rigidbody import Rigidbody
+from components.timer import Timer
+from components.finish import Finish
+from dungeon import DungeonManager
+from geometry import Vector2
+from physics import PhysicsLayers
+from tools import Console
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assets')
+
+def register_game_scene(sm: SceneManager) -> None:
+
+    @sm.scene('game')
+    def game_scene(_: SceneContext) -> None:
+        renderer = GameManager.instance().renderer
+        Console.log('Generating dungeon...')
+        dungeon_obj = GameObject('DungeonController')
+        dm = dungeon_obj.AddComponent(DungeonManager, total_rooms=15, min_room_size=9, max_room_size=15)
+        dm.generate_dungeon()
+        wall_sprite = Sprite.load(path=os.path.join(ASSETS_DIR, 'wall.png'))
+        floor_sprite = Sprite.load(path=os.path.join(ASSETS_DIR, 'floor.png'))
+        door_sprite = Sprite.load(path=os.path.join(ASSETS_DIR, 'door.png'))
+        finish_sprite = Sprite.load(path=os.path.join(ASSETS_DIR, 'finish.png'))
+        dm.load_tile_sprites(wall_sprite=wall_sprite, floor_sprite=floor_sprite, door_sprite=door_sprite, finish_sprite=finish_sprite)
+        renderer.register_object(dungeon_obj)
+        timer_obj = GameObject('GameTimer')
+        timer = timer_obj.AddComponent(Timer)
+        renderer.register_object(timer_obj)
+        player = GameObject('Player')
+        if dm.current_room:
+            room = dm.current_room
+            cx = room.width * room.tile_size / 2 * constants.World.GLOBAL_SCALE
+            cy = room.height * room.tile_size / 2 * constants.World.GLOBAL_SCALE
+            player.transform.position = Vector2(cx, cy)
+        player.transform.scale = Vector2(constants.World.GLOBAL_SCALE, constants.World.GLOBAL_SCALE)
+        player_sprite = Sprite.load(path=os.path.join(ASSETS_DIR, 'Skeleton.png'))
+        player.AddComponent(SpriteRenderer, sprite=player_sprite, sorting_layer=10)
+        player.AddComponent(BoxCollider, layer=PhysicsLayers.PLAYER, position_offset=Vector2(0, 10), size_offset=Vector2(-12, -24))
+        player.AddComponent(Rigidbody)
+        player.AddComponent(PlayerController, move_speed=3)
+        fd = player.AddComponent(Finish)
+        fd.set_timer(timer)
+        fd.set_dungeon_manager(dm)
+        renderer.register_object(player)
+        GameManager.instance().set_player(player)
+        dm.set_player(player)
+        camera_obj = GameObject('MainCamera')
+        camera_obj.transform.position = Vector2(player.transform.position.x, player.transform.position.y)
+        camera_obj.AddComponent(Camera, zoom=1.5)
+        camera_obj.AddComponent(CameraFollow, target=player, lerp_speed=0.1)
+        renderer.register_object(camera_obj)
+        hud_obj = GameObject('HUDCanvas')
+        hud_obj.AddComponent(Canvas, sort_layer=200)
+        renderer.register_object(hud_obj)
+        timer_label_obj = GameObject('HUD_Timer')
+        timer_label_obj.AddComponent(LiveTimerText, game_timer=timer, anchor=UIAnchor(anchor_x=0.5, anchor_y=0.0, offset_x=0.0, offset_y=37.0, width=240, height=50), ui_layer=1)
+        renderer.register_object(timer_label_obj)
+        minimap_obj = GameObject('HUD_Minimap')
+        minimap_obj.AddComponent(Minimap, dungeon_manager=dm, anchor=UIAnchor(anchor_x=1.0, anchor_y=0.0, offset_x=-125 - 20, offset_y=125 + 20, width=250, height=250), ui_layer=1)
+        renderer.register_object(minimap_obj)
+        timer.start()
+        Console.log('[Game] Scene loaded.')
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 scenes\menu_scene.py
+════════════════════════════════════════════════════════════════════════════════
+
+import pygame
+import sys
+from components.backgroundPanel import BackgroundPanel
+from core.ui.ui_anchor import UIAnchor
+from managers.sceneManager import SceneManager, SceneContext
+from managers.saveManager import SaveManager
+from core.gameObject import GameObject
+from core.gameManager import GameManager
+from core.ui.canvas import Canvas
+from core.ui.components.tmp_text import TMP_Text, TextAnchor
+from core.ui.components.button import Button, ButtonColors
+from tools import Console
+import constants
+
+def register_menu_scene(sm: SceneManager) -> None:
+
+    @sm.scene('menu')
+    def menu_scene(_: SceneContext) -> None:
+        renderer = GameManager.instance().renderer
+        canvas_obj = GameObject('MenuCanvas')
+        canvas_obj.AddComponent(Canvas, sort_layer=100)
+        renderer.register_object(canvas_obj)
+        bg_obj = GameObject('MenuBG')
+        bg_obj.AddComponent(BackgroundPanel, anchor=UIAnchor(anchor_x=0.5, anchor_y=0.5, offset_x=0.0, offset_y=0.0, width=constants.WindowConfig.REFERENCE_WIDTH, height=constants.WindowConfig.REFERENCE_HEIGHT), color=(15, 15, 30, 210), corner_radius=16, border_color=(80, 80, 150, 180), border_width=2, ui_layer=0)
+        title_obj = GameObject('TitleText')
+        title_obj.AddComponent(TMP_Text, anchor=UIAnchor(anchor_x=0.5, anchor_y=0, offset_x=0.0, offset_y=60 + 50, width=460, height=120), text='PROJECT\nDOOMSDAY', font_name='Arial', font_size=52, bold=True, color=(220, 80, 80, 255), alignment=TextAnchor.UPPER_CENTER, outline_width=2, outline_color=(80, 0, 0, 255), shadow_offset=(3, 3), shadow_color=(0, 0, 0, 180), ui_layer=1)
+        renderer.register_object(title_obj)
+        best = SaveManager.Get('best_time', None)
+        best_str = _format_time(best) if best is not None else '--:--.--'
+        best_time_obj = GameObject('BestTimeValue')
+        best_time_obj.AddComponent(TMP_Text, anchor=UIAnchor(anchor_x=1, anchor_y=0, offset_x=-230 - 20, offset_y=22.5 + 20, width=460, height=55), text=best_str, font_name='Arial', font_size=32, bold=True, color=(80, 255, 160, 255), alignment=TextAnchor.MIDDLE_RIGHT, outline_width=1, outline_color=(0, 80, 40, 255), ui_layer=1)
+        renderer.register_object(best_time_obj)
+
+        def on_start() -> None:
+            SceneManager.instance().load_scene('game')
+        start_btn_obj = GameObject('StartButton')
+        start_btn_obj.AddComponent(Button, anchor=UIAnchor(anchor_x=0.5, anchor_y=0.5, offset_x=0.0, offset_y=0, width=260, height=55), text='START GAME', font_name='Arial', font_size=20, bold=True, colors=ButtonColors(normal=(40, 100, 60, 220), hovered=(60, 160, 90, 240), pressed=(20, 60, 40, 255), disabled=(50, 50, 50, 150), text_normal=(200, 255, 220, 255), text_hovered=(255, 255, 255, 255), text_pressed=(180, 220, 200, 255), border=(80, 200, 120, 180), border_width=2, corner_radius=10), on_click=on_start, ui_layer=2)
+        renderer.register_object(start_btn_obj)
+
+        def on_quit() -> None:
+            pygame.quit()
+            sys.exit(0)
+        quit_btn_obj = GameObject('QuitButton')
+        quit_btn_obj.AddComponent(Button, anchor=UIAnchor(anchor_x=0.5, anchor_y=0.5, offset_x=0.0, offset_y=70, width=260, height=45), text='QUIT', font_name='Arial', font_size=20, bold=True, colors=ButtonColors(normal=(80, 30, 30, 210), hovered=(140, 50, 50, 240), pressed=(50, 15, 15, 255), text_normal=(220, 160, 160, 255), text_hovered=(255, 200, 200, 255), border=(180, 80, 80, 160), border_width=1, corner_radius=8), on_click=on_quit, ui_layer=2)
+        renderer.register_object(quit_btn_obj)
+
+def _format_time(t: float) -> str:
+    minutes = int(t) // 60
+    seconds = int(t) % 60
+    millis = int((t - int(t)) * 100)
+    return f'{minutes:02d}:{seconds:02d}.{millis:02d}'
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 tools\console.py
+════════════════════════════════════════════════════════════════════════════════
+
+import sys
+import os
+import inspect
+import time
+from typing import Optional, Union, List
+
+class Color:
+
+    class Style:
+        RESET: str = '\x1b[0m'
+        BOLD: str = '\x1b[1m'
+        DIM: str = '\x1b[2m'
+        ITALIC: str = '\x1b[3m'
+        UNDERLINE: str = '\x1b[4m'
+        BLINK: str = '\x1b[5m'
+        INVERSE: str = '\x1b[7m'
+        HIDDEN: str = '\x1b[8m'
+        STRIKETHROUGH: str = '\x1b[9m'
+
+    class Fore:
+        BLACK: str = '\x1b[30m'
+        RED: str = '\x1b[31m'
+        GREEN: str = '\x1b[32m'
+        YELLOW: str = '\x1b[33m'
+        BLUE: str = '\x1b[34m'
+        MAGENTA: str = '\x1b[35m'
+        CYAN: str = '\x1b[36m'
+        WHITE: str = '\x1b[37m'
+        BRIGHT_BLACK: str = '\x1b[90m'
+        BRIGHT_RED: str = '\x1b[91m'
+        BRIGHT_GREEN: str = '\x1b[92m'
+        BRIGHT_YELLOW: str = '\x1b[93m'
+        BRIGHT_BLUE: str = '\x1b[94m'
+        BRIGHT_MAGENTA: str = '\x1b[95m'
+        BRIGHT_CYAN: str = '\x1b[96m'
+        BRIGHT_WHITE: str = '\x1b[97m'
+
+    class Back:
+        BLACK: str = '\x1b[40m'
+        RED: str = '\x1b[41m'
+        GREEN: str = '\x1b[42m'
+        YELLOW: str = '\x1b[43m'
+        BLUE: str = '\x1b[44m'
+        MAGENTA: str = '\x1b[45m'
+        CYAN: str = '\x1b[46m'
+        WHITE: str = '\x1b[47m'
+        BRIGHT_BLACK: str = '\x1b[100m'
+        BRIGHT_RED: str = '\x1b[101m'
+        BRIGHT_GREEN: str = '\x1b[102m'
+        BRIGHT_YELLOW: str = '\x1b[103m'
+        BRIGHT_BLUE: str = '\x1b[104m'
+        BRIGHT_MAGENTA: str = '\x1b[105m'
+        BRIGHT_CYAN: str = '\x1b[106m'
+        BRIGHT_WHITE: str = '\x1b[107m'
+
+    @staticmethod
+    def reset_if(condition: str) -> str:
+        return Color.Style.RESET if condition else ''
+
+class CallerInfo:
+
+    def __init__(self, filename: str, lineno: int, function: str, code_context: Union[List[str], str, None]) -> None:
+        self.filename = filename
+        self.lineno = lineno
+        self.function = function
+        self.code_context = code_context
+
+    def __repr__(self) -> str:
+        return f'CallerInfo(filename={self.filename!r}, lineno={self.lineno}, function={self.function!r}, code_context={self.code_context!r})'
+_INTERNAL_MODULES = frozenset({__name__, 'console', 'tools.console'})
+
+class Console:
+    MAX_FRAMES: int = 0
+
+    @staticmethod
+    def log(message: str) -> None:
+        ts = Console._get_formatted_time()
+        print(f'{Color.Fore.BRIGHT_BLACK}[{ts}]{Color.Style.RESET} {Color.Fore.WHITE}INFO :{Color.Style.RESET} {message}', flush=True)
+
+    @staticmethod
+    def error(message: str, custom_info: bool=False, caller_info: Optional[List[CallerInfo]]=None) -> None:
+        frames = caller_info if custom_info else Console._collect_frames()
+        Console._print_traceback(message=message, level='ERROR', accent=Color.Fore.BRIGHT_RED, header_bg=Color.Back.RED, frames=frames)
+
+    @staticmethod
+    def warning(message: str, custom_info: bool=False, caller_info: Optional[List[CallerInfo]]=None) -> None:
+        frames = caller_info if custom_info else Console._collect_frames()
+        Console._print_traceback(message=message, level='WARNING', accent=Color.Fore.BRIGHT_YELLOW, header_bg=Color.Back.YELLOW, frames=frames)
+
+    @staticmethod
+    def clear() -> None:
+        os.system('cls' if sys.platform == 'win32' else 'clear')
+
+    @staticmethod
+    def _get_formatted_time() -> str:
+        return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+
+    @staticmethod
+    def _collect_frames() -> List[CallerInfo]:
+        raw_stack = inspect.stack()
+        frames: List[CallerInfo] = []
+        for frame_info in raw_stack:
+            module = frame_info.frame.f_globals.get('__name__', '')
+            short_file = os.path.basename(frame_info.filename)
+            if module in _INTERNAL_MODULES:
+                continue
+            if short_file in ('console.py',):
+                continue
+            code = ''
+            if frame_info.code_context:
+                code = frame_info.code_context[0].strip()
+            frames.append(CallerInfo(filename=frame_info.filename, lineno=frame_info.lineno, function=frame_info.function, code_context=code))
+        frames.reverse()
+        if Console.MAX_FRAMES > 0:
+            frames = frames[-Console.MAX_FRAMES:]
+        return frames
+
+    @staticmethod
+    def _shorten_path(path: str) -> str:
+        try:
+            return os.path.relpath(path)
+        except ValueError:
+            return path
+
+    @staticmethod
+    def _print_traceback(message: str, level: str, accent: str, header_bg: str, frames: List[CallerInfo]) -> None:
+        R = Color.Style.RESET
+        BRIGHT_RED = Color.Fore.BRIGHT_RED
+        CYAN = Color.Fore.CYAN
+        GREY = Color.Fore.BRIGHT_BLACK
+        WHITE = Color.Fore.WHITE
+        lines: List[str] = []
+        lines.append(f'{accent}{level}: {message}{R}')
+        lines.append(f'{BRIGHT_RED}Traceback (most recent call last):{R}')
+        if not frames:
+            lines.append(f'  {GREY}<no frames available>{R}')
+        else:
+            for frame in frames:
+                short = Console._shorten_path(frame.filename)
+                lines.append('')
+                lines.append(f'{BRIGHT_RED}  File {R}{CYAN}"{short}"{R}{BRIGHT_RED}, line {R}{frame.lineno}{R}{BRIGHT_RED}, in {R}{WHITE}{frame.function}{R}')
+                if frame.code_context:
+                    lines.append(f'    {frame.code_context}{R}')
+        lines.append('')
+        print('\n'.join(lines), flush=True)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 tools\__init__.py
+════════════════════════════════════════════════════════════════════════════════
+
+from .console import Console
+__all__ = ['Console']
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 utils\color.py
+════════════════════════════════════════════════════════════════════════════════
+
+from numbers import Real
+from typing import Optional, Tuple
+from tools import Console
+
+class Color:
+    __r_default = 0
+    __g_default = 0
+    __b_default = 0
+    __a_default = 255
+
+    def __init__(self, r: Optional[Real]=None, g: Optional[Real]=None, b: Optional[Real]=None, a: Optional[Real]=None) -> None:
+        self._r: int = self._clamp((int(r) if not isinstance(r, int) else r) if isinstance(r, Real) else Color.__r_default)
+        self._g: int = self._clamp((int(g) if not isinstance(g, int) else g) if isinstance(g, Real) else Color.__g_default)
+        self._b: int = self._clamp((int(b) if not isinstance(b, int) else b) if isinstance(b, Real) else Color.__b_default)
+        self._a: int = self._clamp((int(a) if not isinstance(a, int) else a) if isinstance(a, Real) else Color.__a_default)
+
+    @staticmethod
+    def _clamp(value: int, min_val: int=0, max_val: int=255) -> int:
+        return max(min_val, min(max_val, value))
+
+    @property
+    def r(self) -> int:
+        return self._r
+
+    @property
+    def g(self) -> int:
+        return self._g
+
+    @property
+    def b(self) -> int:
+        return self._b
+
+    @property
+    def a(self) -> int:
+        return self._a
+
+    @property
+    def rgb(self) -> Tuple[int, int, int]:
+        return (self._r, self._g, self._b)
+
+    @property
+    def rgba(self) -> Tuple[int, int, int, int]:
+        return (self._r, self._g, self._b, self._a)
+
+    @r.setter
+    def r(self, value: Real) -> None:
+        if isinstance(value, Real):
+            self._r = self._clamp(int(value) if not isinstance(value, int) else value)
+        else:
+            Console.error('Invalid color value for red component.')
+
+    @g.setter
+    def g(self, value: Real) -> None:
+        if isinstance(value, Real):
+            self._g = self._clamp(int(value) if not isinstance(value, int) else value)
+        else:
+            Console.error('Invalid color value for green component.')
+
+    @b.setter
+    def b(self, value: Real) -> None:
+        if isinstance(value, Real):
+            self._b = self._clamp(int(value) if not isinstance(value, int) else value)
+        else:
+            Console.error('Invalid color value for blue component.')
+
+    @a.setter
+    def a(self, value: Real) -> None:
+        if isinstance(value, Real):
+            self._a = self._clamp(int(value) if not isinstance(value, int) else value)
+        else:
+            Console.error('Invalid color value for alpha component.')
+
+    def __str__(self) -> str:
+        return f'Color(r={self._r}, g={self._g}, b={self._b}, a={self._a})'
+
+    def __repr__(self) -> str:
+        return f'Color({self._r}, {self._g}, {self._b}, {self._a})'
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 utils\event.py
+════════════════════════════════════════════════════════════════════════════════
+
+from typing import List, Callable, Optional, Any
+
+class Event:
+
+    def __init__(self, listeners: Optional[List[Callable]]=None) -> None:
+        self._listeners: List[Callable] = [] if listeners is None else listeners.copy()
+
+    def add_listener(self, callback: Callable) -> None:
+        if callback not in self._listeners:
+            self._listeners.append(callback)
+
+    def remove_listener(self, callback: Callable) -> None:
+        if callback in self._listeners:
+            self._listeners.remove(callback)
+
+    def invoke(self, *args: Any, **kwargs: Any) -> None:
+        for listener in self._listeners:
+            listener(*args, **kwargs)
+
+
+════════════════════════════════════════════════════════════════════════════════
+📄 utils\__init__.py
+════════════════════════════════════════════════════════════════════════════════
+
+from .color import Color
+from .event import Event
+__all__ = ['Color', 'Event']
+
